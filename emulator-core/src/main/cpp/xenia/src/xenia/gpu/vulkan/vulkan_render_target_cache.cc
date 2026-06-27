@@ -3954,6 +3954,40 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(
           switch (dest_color_format) {
             case xenos::ColorRenderTargetFormat::k_8_8_8_8:
             case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA: {
+              // Same-base 7e3 source -> decode the 7e3 floats to [0, 1] instead
+              // of bit-reinterpreting. See IsTransferValueConverted7e3And8888
+              // and the D3D12 TransferConvert7e3To8888.
+              if (key.value_convert && source_is_color &&
+                  (source_color_format ==
+                       xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT ||
+                   source_color_format ==
+                       xenos::ColorRenderTargetFormat::
+                           k_2_10_10_10_FLOAT_AS_16_16_16_16)) {
+                id_vector_temp.clear();
+                for (uint32_t i = 0; i < 3; ++i) {
+                  id_vector_temp.push_back(builder.createTriBuiltinCall(
+                      type_float, ext_inst_glsl_std_450, GLSLstd450NClamp,
+                      SpirvShaderTranslator::Float7e3To32(
+                          builder, packed, 10 * i, false,
+                          ext_inst_glsl_std_450),
+                      builder.makeFloatConstant(0.0f),
+                      builder.makeFloatConstant(1.0f)));
+                }
+                id_vector_temp.push_back(builder.createBinOp(
+                    spv::OpFMul, type_float,
+                    builder.createUnaryOp(
+                        spv::OpConvertUToF, type_float,
+                        builder.createTriOp(spv::OpBitFieldUExtract, type_uint,
+                                            packed,
+                                            builder.makeUintConstant(30),
+                                            builder.makeUintConstant(2))),
+                    builder.makeFloatConstant(1.0f / 3.0f)));
+                builder.createStore(builder.createCompositeConstruct(
+                                        type_fragment_data, id_vector_temp),
+                                    output_fragment_data);
+                break;
+              }
+
               // For a gamma destination stored as linear in unorm16, the raw
               // EDRAM bytes are reinterpreted as gamma and decoded to the
               // midpoint of each byte's linear range (alpha stays linear). The
@@ -4010,6 +4044,31 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(
             case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
             case xenos::ColorRenderTargetFormat::
                 k_2_10_10_10_FLOAT_AS_16_16_16_16: {
+               if (key.value_convert && source_is_color &&
+                  source_color_format ==
+                      xenos::ColorRenderTargetFormat::k_8_8_8_8) {
+                // Reverse: 8_8_8_8 source -> unpack the unorm bytes to [0, 1].
+                // Matches the D3D12 TransferConvert8888To7e3.
+                spv::Id component_width = builder.makeUintConstant(8);
+                spv::Id unorm_scale = builder.makeFloatConstant(1.0f / 255.0f);
+                id_vector_temp.clear();
+                for (uint32_t i = 0; i < 4; ++i) {
+                  id_vector_temp.push_back(builder.createBinOp(
+                      spv::OpFMul, type_float,
+                      builder.createUnaryOp(
+                          spv::OpConvertUToF, type_float,
+                          builder.createTriOp(spv::OpBitFieldUExtract,
+                                              type_uint, packed,
+                                              builder.makeUintConstant(8 * i),
+                                              component_width)),
+                      unorm_scale));
+                }
+                builder.createStore(builder.createCompositeConstruct(
+                                        type_fragment_data, id_vector_temp),
+                                    output_fragment_data);
+                break;
+              }
+              
               id_vector_temp.clear();
               // Color.
               spv::Id width_rgb = builder.makeUintConstant(10);
@@ -5259,6 +5318,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
               source_rt_key.msaa_samples;
           new_transfer_shader_key.source_resource_format =
               source_rt_key.resource_format;
+          new_transfer_shader_key.value_convert =
+              IsTransferValueConverted7e3And8888(source_rt_key, dest_rt_key);
           bool host_depth_source_is_copy =
               host_depth_source_vulkan_rt == &dest_vulkan_rt;
           // The host depth copy buffer has only raw samples.

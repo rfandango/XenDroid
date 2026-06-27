@@ -49,6 +49,7 @@ DECLARE_bool(execute_unclipped_draw_vs_on_cpu);
 DECLARE_bool(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend);
 DECLARE_bool(execute_unclipped_draw_vs_on_cpu_with_scissor);
 DECLARE_bool(mrt_edram_used_range_clamp_to_min);
+DECLARE_bool(value_convert_7e3_8888_reuse);
 DECLARE_bool(depth_float24_convert_in_pixel_shader);
 DECLARE_bool(depth_float24_round);
 DECLARE_bool(depth_transfer_not_equal_test);
@@ -312,6 +313,7 @@ void ImGuiDebugDialog::LoadCurrentSettings() {
   execute_unclipped_draw_vs_on_cpu_with_scissor_ =
       cvars::execute_unclipped_draw_vs_on_cpu_with_scissor;
   mrt_edram_used_range_clamp_to_min_ = cvars::mrt_edram_used_range_clamp_to_min;
+  value_convert_7e3_8888_reuse_ = cvars::value_convert_7e3_8888_reuse;
 
   depth_float24_convert_in_pixel_shader_ =
       cvars::depth_float24_convert_in_pixel_shader;
@@ -635,6 +637,7 @@ void ImGuiDebugDialog::OnDraw(ImGuiIO& io) {
       "execute_unclipped_draw_vs_on_cpu_for_psi_render_backend",
       "execute_unclipped_draw_vs_on_cpu_with_scissor",
       "mrt_edram_used_range_clamp_to_min",
+      "value_convert_7e3_8888_reuse",
   });
   bool show_memory = AnyMatchesFilter({"scribble_heap", "scribble_heap_value"});
   bool show_depth = AnyMatchesFilter(
@@ -983,6 +986,18 @@ void ImGuiDebugDialog::OnDraw(ImGuiIO& io) {
                                      &mrt_edram_used_range_clamp_to_min_)) {
               ApplyBoolSetting("GPU", "mrt_edram_used_range_clamp_to_min",
                                mrt_edram_used_range_clamp_to_min_);
+            }
+          }
+
+           if (MatchesFilter("value_convert_7e3_8888_reuse")) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            DrawLabelCell("value_convert_7e3_8888_reuse");
+            ImGui::TableSetColumnIndex(1);
+            if (RightAlignedCheckbox("##value_convert_7e3_8888_reuse",
+                                     &value_convert_7e3_8888_reuse_)) {
+              ApplyBoolSetting("GPU", "value_convert_7e3_8888_reuse",
+                               value_convert_7e3_8888_reuse_);
             }
           }
 

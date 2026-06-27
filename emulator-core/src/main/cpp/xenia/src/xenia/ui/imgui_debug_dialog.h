@@ -100,6 +100,7 @@ class ImGuiDebugDialog : public ImGuiGamepadDialog {
   bool execute_unclipped_draw_vs_on_cpu_for_psi_render_backend_;
   bool execute_unclipped_draw_vs_on_cpu_with_scissor_;
   bool mrt_edram_used_range_clamp_to_min_;
+  bool value_convert_7e3_8888_reuse_;
   // Depth / Precision
   bool depth_bias_shader_offset_;
   bool depth_float24_convert_in_pixel_shader_;
