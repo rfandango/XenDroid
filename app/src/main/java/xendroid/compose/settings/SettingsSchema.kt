@@ -182,7 +182,7 @@ object SettingsSchema {
             l("GPU", "gpu", "GPU backend", "vulkan",
                 "vulkan" to "vulkan", "null" to "null"),
             b("GPU", "depth_float24_convert_in_pixel_shader", "Depth float24 convert in pixel shader", false),
-            b("GPU", "value_convert_7e3_8888_reuse", "Resolve scale: fill half-pixel offset", true),
+            b("GPU", "value_convert_7e3_8888_reuse", "value_convert_7e3_8888_reuse", true),
         )),
 
         SettingsCategory("CPU", listOf(
