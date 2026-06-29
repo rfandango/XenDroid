@@ -1,11 +1,22 @@
 name: XenDroid Release
+
 on:
+  pull_request:
+    branches:
+      - main
+
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+
 jobs:
   build-release:
     runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
 
     env:
       ANDROID_NDK_VERSION: 27.2.12479018
@@ -22,7 +33,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
 
       ##################################################################
       # Python
@@ -30,7 +41,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       ##################################################################
       # Android SDK + NDK + CMake
@@ -54,14 +65,13 @@ jobs:
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
             | sudo gpg --dearmor -o /usr/share/keyrings/lunarg.gpg
 
-          echo "deb [signed-by=/usr/share/keyrings/lunarg.gpg] \
-          https://packages.lunarg.com/vulkan/latest/lunarg-vulkan-jammy.list" \
-          | sudo tee /etc/apt/sources.list.d/lunarg-vulkan.list
+          echo "deb [signed-by=/usr/share/keyrings/lunarg.gpg] https://packages.lunarg.com/vulkan/latest/lunarg-vulkan-jammy.list" \
+            | sudo tee /etc/apt/sources.list.d/lunarg-vulkan.list
 
           sudo apt update
           sudo apt install -y vulkan-sdk
 
-      - name: Verify SPIR-V Tools
+      - name: Verify Vulkan Tools
         run: |
           glslangValidator --version
           spirv-opt --version
@@ -80,13 +90,12 @@ jobs:
       ##################################################################
       - name: Decode keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" \
-            | base64 -d > release.keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
 
       ##################################################################
-      # Build Release
+      # Build
       ##################################################################
-      - name: Build APK
+      - name: Build Release APK
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
@@ -105,26 +114,42 @@ jobs:
             --key-pass pass:${{ secrets.KEY_PASSWORD }} \
             "$APK"
 
-      - name: Verify Signature
+      - name: Verify APK Signature
         run: |
           APK=$(find . -name "*release*.apk" | head -n 1)
-
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
 
       ##################################################################
-      # Upload artifact
+      # Rename APK
       ##################################################################
-      - name: Set short SHA
+      - name: Get Short SHA
         id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Rename APK
         run: |
           APK=$(find . -name "*release*.apk" | head -n 1)
           mv "$APK" "XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk"
 
-      - name: Upload APK
+      ##################################################################
+      # Upload Artifact (PR + main)
+      ##################################################################
+      - name: Upload Artifact
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: XenDroid_Release_${{ steps.vars.outputs.sha_short }}
           path: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
+          retention-days: 30
+
+      ##################################################################
+      # Publish GitHub Release (only tags)
+      ##################################################################
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
