@@ -14,7 +14,7 @@ We are looking foward to keep the project updated alongside the Edge fork,
 and keep the code compatible with Xenia licenses.
 
 ## Be aware of scams
-XenDroid is a free project, and will NEVER ask for money. If you paid for this, then you got scammed.
+XenDroid is a free project. If you paid for this, then you got scammed.
 The apk is available under the releases section, along with the distributed source code.
 
 ## Status (to update)
@@ -26,7 +26,7 @@ Releases (to update)
 [Latest](https://github.com/has207/xenia-edge/releases/latest)
 
 
-## Building (to update)
+## Building
 
 See [BUILD.md](BUILD.md) for build instructions (Linux and Windows). In short:
 `./gradlew :app:assembleDebug` (Linux) or `gradlew.bat :app:assembleDebug` (Windows).
@@ -46,3 +46,9 @@ We recommend using these custom Vulkan drivers to achieve a better experience:
 - [Adreno 7xx](https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v26.2.0-R6) Turnip drivers
 
 You can check your device specs with [CPU X](https://play.google.com/store/apps/details?id=com.abs.cpu_z_advance&hl=it) to get the matching driver.
+
+## About Donations
+I would like to take this opportunity to help a friend out. If you are willing to make donations, please consider donating to
+[Bitshifter's Kofi](https://ko-fi.com/bitsh1ft3r/goal?g=0). He's the maintainer of the [Xenon Project](https://github.com/xenon-emu/xenon)
+and every donation can help making a difference for the maintainer.
+Thank you - Fabxx
