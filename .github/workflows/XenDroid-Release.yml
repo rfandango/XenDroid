@@ -11,6 +11,7 @@ on:
       - 'v*'
 jobs:
   build-release:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
 
     env:
@@ -179,3 +180,130 @@ jobs:
         with:
           name: XenDroid_Release_${{ steps.vars.outputs.sha_short }}
           path: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
+
+  build-debug:
+      if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+      runs-on: ubuntu-24.04
+
+      env:
+        ANDROID_NDK_VERSION: 27.2.12479018
+        ANDROID_PLATFORM: android-35
+
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
+          with:
+            submodules: recursive
+            fetch-depth: 0
+
+        - name: Restore CMake cache
+          uses: actions/cache@v4
+          with:
+            path: |
+              emulator-core/.cxx
+              emulator-core/build/.cmake
+            key: >
+              ${{ runner.os }}-cmake-${{ hashFiles(
+                'emulator-core/src/main/cpp/CMakeLists.txt',
+                'emulator-core/src/main/cpp/**/*.cmake',
+                'emulator-core/src/main/cpp/**/CMakeLists.txt'
+              ) }}
+            restore-keys: |
+              ${{ runner.os }}-cmake-
+
+        ##################################################################
+        # JDK 21
+        ##################################################################
+        - name: Setup JDK 21
+          uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: '21'
+            cache: gradle
+
+        ##################################################################
+        # Python
+        ##################################################################
+        - name: Setup Python
+          uses: actions/setup-python@v5
+          with:
+            python-version: '3.x'
+      
+
+        ##################################################################
+        # Android Command Line Tools
+        ##################################################################
+        - name: Install Android command-line tools
+          run: |
+            mkdir -p "$HOME/android-sdk/cmdline-tools"
+
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip
+            unzip -q commandlinetools-linux-12266719_latest.zip
+
+            mv cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
+
+            echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+            echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+        - name: Install SDK Components
+          run: |
+            yes | sdkmanager --licenses
+
+            sdkmanager \
+              "platforms;android-35" \
+              "build-tools;35.0.0" \
+              "ndk;27.2.12479018" \
+              "cmake;3.30.3"
+
+        ##################################################################
+        # Vulkan SDK
+        ##################################################################
+        - name: Install Vulkan tools
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y \
+              glslang-tools \
+              spirv-tools
+
+        - name: Verify SPIR-V Tools
+          run: |
+            glslangValidator --version
+            spirv-opt --version
+            spirv-dis --version
+
+        ##################################################################
+        # local.properties
+        ##################################################################
+        - name: Generate local.properties
+          run: |
+            echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
+            echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.30.3" >> local.properties
+
+        ##################################################################
+        # Build Debug
+        ##################################################################
+        - name: Build APK
+          run: |
+            chmod +x gradlew
+            ./gradlew \
+              --build-cache \
+              --parallel \
+              assembleDebug
+
+        ##################################################################
+        # Upload artifact
+        ##################################################################
+        - name: Set short SHA
+          id: vars
+          run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+        - name: Rename APK
+          run: |
+            APK=$(find . -name "*debug*.apk" | head -n 1)
+            mv "$APK" "XenDroid_Debug_${{ steps.vars.outputs.sha_short }}.apk"
+
+        - name: Upload APK
+          uses: actions/upload-artifact@v4
+          with:
+            name: XenDroid_Debug_${{ steps.vars.outputs.sha_short }}
+            path: XenDroid_Debug_${{ steps.vars.outputs.sha_short }}.apk
