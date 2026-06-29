@@ -67,6 +67,12 @@ jobs:
           remove-haskell: true
           remove-codeql: true
 
+      - name: Check Android SDK
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          which sdkmanager || true
+          sdkmanager --version
+
       ##################################################################
       # Android SDK + NDK + CMake
       ##################################################################
