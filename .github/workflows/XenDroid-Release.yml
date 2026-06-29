@@ -1,6 +1,12 @@
 name: XenDroid Release
 on:
+  pull_request:
+    branches:
+      - main
+
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 jobs:
