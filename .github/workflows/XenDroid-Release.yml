@@ -18,6 +18,13 @@ jobs:
       ANDROID_PLATFORM: android-35
 
     steps:
+      - name: Check APK keystore
+        run: |
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not configured."
+            exit 1
+          fi
+      
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -112,8 +119,17 @@ jobs:
       ##################################################################
       - name: Decode keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" \
-            | base64 -d > release.keystore
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not configured."
+            exit 1
+          fi
+
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release.keystore
+
+          if [ ! -s release.keystore ]; then
+            echo "::error::Failed to decode keystore or keystore is empty."
+            exit 1
+          fi
 
       ##################################################################
       # Build Release
