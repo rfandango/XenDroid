@@ -598,6 +598,8 @@ class VulkanCommandProcessor final : public CommandProcessor {
   VkDeviceSize zpd_fsi_counter_descriptor_range_ = 0;
 
   ui::vulkan::VulkanGPUCompletionTimeline completion_timeline_;
+  // Completion of resolve readback copies on the dedicated transfer queue.
+  ui::vulkan::VulkanGPUCompletionTimeline transfer_completion_timeline_;
   // Per-frame GPU synchronization diagnostics (worker thread only), reported
   // alongside the log_gpu_frame_time_breakdown breakdown.
   struct VkFrameSyncStats {
@@ -1093,12 +1095,42 @@ class VulkanCommandProcessor final : public CommandProcessor {
     uint64_t last_used_frame = 0;
   };
 
+   // A resolve readback copy deferred to the transfer queue (DMA engine),
+  // flushed as a batch after the graphics submission that produced its source
+  // data.
+  struct PendingReadbackCopy {
+    ReadbackBuffer* readback_buffer;
+    uint32_t buffer_index;
+    uint32_t src_offset;
+    uint32_t size;
+  };
+
+  // Records the pending readback copies into a transfer command buffer and
+  // submits them to the dedicated transfer queue, waiting on the just-submitted
+  // graphics work via graphics_signal_semaphore. Stamps the transfer submission
+  // onto each target buffer and clears the pending list.
+  bool SubmitReadbackCopiesToTransferQueue(
+      VkSemaphore graphics_signal_semaphore);
+  // Reclaims transfer command buffers and graphics->transfer semaphores whose
+  // transfer submission has completed.
+  void ReclaimCompletedTransferResources();
+
   // Helper to evict old readback buffers from a cache map
   void EvictOldReadbackBuffers(
       std::unordered_map<uint64_t, ReadbackBuffer>& buffer_map);
 
   // Map: (written_address << 32 | written_length) -> ReadbackBuffer
   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
+
+  // Dedicated transfer (DMA) queue resources for resolve readback copies, used
+  // only when the device has a transfer-only queue family.
+  std::vector<PendingReadbackCopy> pending_readback_copies_;
+  std::vector<CommandBuffer> transfer_command_buffers_writable_;
+  std::deque<std::pair<uint64_t, CommandBuffer>>
+      transfer_command_buffers_submitted_;
+  std::vector<VkSemaphore> transfer_wait_semaphores_free_;
+  std::deque<std::pair<uint64_t, VkSemaphore>>
+      transfer_wait_semaphores_in_flight_;
 
   // Simple single buffer for memexport (full mode - always syncs, no
   // double-buffering)

@@ -57,6 +57,13 @@ bool VulkanSharedMemory::Initialize() {
       VK_BUFFER_CREATE_SPARSE_BINDING_BIT |
       VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
 
+      // When a dedicated transfer queue is used for resolve readback, the buffer is
+  // read from both the graphics/compute and transfer families, so it must be
+  // shared concurrently between them (no compression penalty for a buffer).
+  const uint32_t transfer_family = vulkan_device->queue_family_transfer();
+  const uint32_t concurrent_queue_families[2] = {
+      vulkan_device->queue_family_graphics_compute(), transfer_family};
+
   // Try to create a sparse buffer.
   VkBufferCreateInfo buffer_create_info;
   buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -66,9 +73,15 @@ bool VulkanSharedMemory::Initialize() {
   buffer_create_info.usage =
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-  buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  buffer_create_info.queueFamilyIndexCount = 0;
-  buffer_create_info.pQueueFamilyIndices = nullptr;
+  if (transfer_family != UINT32_MAX) {
+    buffer_create_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    buffer_create_info.queueFamilyIndexCount = 2;
+    buffer_create_info.pQueueFamilyIndices = concurrent_queue_families;
+  } else {
+    buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    buffer_create_info.queueFamilyIndexCount = 0;
+    buffer_create_info.pQueueFamilyIndices = nullptr;
+  }
   if (cvars::vulkan_sparse_shared_memory &&
       vulkan_device->properties().sparseResidencyBuffer) {
     if (dfn.vkCreateBuffer(device, &buffer_create_info, nullptr, &buffer_) ==

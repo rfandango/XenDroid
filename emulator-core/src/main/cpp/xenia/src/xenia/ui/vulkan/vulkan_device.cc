@@ -477,6 +477,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   uint32_t first_queue_family_graphics_compute_sparse_binding = UINT32_MAX;
   uint32_t first_queue_family_graphics_compute = UINT32_MAX;
   uint32_t first_queue_family_sparse_binding = UINT32_MAX;
+  uint32_t first_queue_family_transfer = UINT32_MAX;
   bool has_presentation_queue_family = false;
 
   for (uint32_t queue_family_index = 0; queue_family_index < queue_family_count;
@@ -504,6 +505,16 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
             std::min(queue_family_index,
                      first_queue_family_graphics_compute_sparse_binding);
       }
+    }
+
+     // A transfer-only family (transfer supported, graphics and compute not) is
+    // the dedicated DMA / copy engine, used for resolve readback copies.
+    if (with_gpu_emulation &&
+        !(queue_unsupported_flags & VK_QUEUE_TRANSFER_BIT) &&
+        (queue_unsupported_flags & VK_QUEUE_GRAPHICS_BIT) &&
+        (queue_unsupported_flags & VK_QUEUE_COMPUTE_BIT)) {
+      first_queue_family_transfer =
+          std::min(queue_family_index, first_queue_family_transfer);
     }
 
     if (with_swapchain) {
@@ -583,6 +594,22 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
         std::max(size_t(1),
                  device->queue_families_[device->queue_family_sparse_binding_]
                      .queues.size()));
+  }
+
+  device->queue_family_transfer_ = first_queue_family_transfer;
+  if (device->queue_family_transfer_ != UINT32_MAX) {
+    device->queue_families_[device->queue_family_transfer_].queues.resize(
+        std::max(size_t(1),
+                 device->queue_families_[device->queue_family_transfer_]
+                     .queues.size()));
+    XELOGI(
+        "VulkanDevice: using dedicated transfer queue family {} for readback",
+        device->queue_family_transfer_);
+  } else {
+    XELOGI(
+        "VulkanDevice: no dedicated transfer queue family; readback copies "
+        "stay "
+        "on the graphics queue");
   }
 
   size_t max_enabled_queues_per_family = 0;

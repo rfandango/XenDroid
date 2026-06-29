@@ -175,6 +175,11 @@ VulkanCommandProcessor::VulkanCommandProcessor(
                                graphics_system->provider())
                                ->vulkan_device(),
                            "cp"),
+      transfer_completion_timeline_(
+          static_cast<const ui::vulkan::VulkanProvider*>(
+              graphics_system->provider())
+              ->vulkan_device(),
+          "cp-transfer"),
       deferred_command_buffer_(*this),
       transient_descriptor_allocator_uniform_buffer_(
           static_cast<const ui::vulkan::VulkanProvider*>(
@@ -244,6 +249,10 @@ void VulkanCommandProcessor::InvalidateGpuMemory() {
 }
 
 void VulkanCommandProcessor::ClearReadbackBuffers() {
+  // Pending copies hold pointers into readback_buffers_, and in-flight transfer
+  // copies target its buffers, so drain and drop them before clearing.
+  transfer_completion_timeline_.AwaitAllSubmissions();
+  pending_readback_copies_.clear();
   readback_buffers_.clear();
   memexport_readback_buffers_.clear();
 }
@@ -1486,6 +1495,7 @@ bool VulkanCommandProcessor::SetupContext() {
 
 void VulkanCommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
+  transfer_completion_timeline_.AwaitAllSubmissions();
 
   ShutdownZPDQueryResources();
   zpd_host_query_pool_.reset();
@@ -1691,6 +1701,17 @@ void VulkanCommandProcessor::ShutdownContext() {
   }
   command_buffers_writable_.clear();
 
+  pending_readback_copies_.clear();
+  for (const auto& command_buffer_pair : transfer_command_buffers_submitted_) {
+    dfn.vkDestroyCommandPool(device, command_buffer_pair.second.pool, nullptr);
+  }
+  transfer_command_buffers_submitted_.clear();
+  for (const CommandBuffer& command_buffer :
+       transfer_command_buffers_writable_) {
+    dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
+  }
+  transfer_command_buffers_writable_.clear();
+
   for (const auto& destroy_pair : destroy_framebuffers_) {
     dfn.vkDestroyFramebuffer(device, destroy_pair.second, nullptr);
   }
@@ -1732,6 +1753,15 @@ void VulkanCommandProcessor::ShutdownContext() {
     dfn.vkDestroySemaphore(device, semaphore, nullptr);
   }
   semaphores_free_.clear();
+
+  for (const auto& semaphore : transfer_wait_semaphores_in_flight_) {
+    dfn.vkDestroySemaphore(device, semaphore.second, nullptr);
+  }
+  transfer_wait_semaphores_in_flight_.clear();
+  for (VkSemaphore semaphore : transfer_wait_semaphores_free_) {
+    dfn.vkDestroySemaphore(device, semaphore, nullptr);
+  }
+  transfer_wait_semaphores_free_.clear();
 
   device_lost_ = false;
 
@@ -4554,6 +4584,122 @@ void VulkanCommandProcessor::EvictOldReadbackBuffers(
   }
 }
 
+void VulkanCommandProcessor::ReclaimCompletedTransferResources() {
+  const uint64_t completed =
+      transfer_completion_timeline_.UpdateAndGetCompletedSubmission();
+  while (!transfer_command_buffers_submitted_.empty() &&
+         transfer_command_buffers_submitted_.front().first <= completed) {
+    transfer_command_buffers_writable_.push_back(
+        transfer_command_buffers_submitted_.front().second);
+    transfer_command_buffers_submitted_.pop_front();
+  }
+  while (!transfer_wait_semaphores_in_flight_.empty() &&
+         transfer_wait_semaphores_in_flight_.front().first <= completed) {
+    transfer_wait_semaphores_free_.push_back(
+        transfer_wait_semaphores_in_flight_.front().second);
+    transfer_wait_semaphores_in_flight_.pop_front();
+  }
+}
+
+bool VulkanCommandProcessor::SubmitReadbackCopiesToTransferQueue(
+    VkSemaphore graphics_signal_semaphore) {
+  const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+
+  ReclaimCompletedTransferResources();
+
+  // Acquire a transfer command buffer.
+  if (transfer_command_buffers_writable_.empty()) {
+    CommandBuffer command_buffer;
+    VkCommandPoolCreateInfo command_pool_create_info;
+    command_pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    command_pool_create_info.pNext = nullptr;
+    command_pool_create_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    command_pool_create_info.queueFamilyIndex =
+        vulkan_device->queue_family_transfer();
+    if (dfn.vkCreateCommandPool(device, &command_pool_create_info, nullptr,
+                                &command_buffer.pool) != VK_SUCCESS) {
+      XELOGE("Failed to create a Vulkan transfer command pool");
+      return false;
+    }
+    VkCommandBufferAllocateInfo command_buffer_allocate_info;
+    command_buffer_allocate_info.sType =
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_buffer_allocate_info.pNext = nullptr;
+    command_buffer_allocate_info.commandPool = command_buffer.pool;
+    command_buffer_allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_buffer_allocate_info.commandBufferCount = 1;
+    if (dfn.vkAllocateCommandBuffers(device, &command_buffer_allocate_info,
+                                     &command_buffer.buffer) != VK_SUCCESS) {
+      XELOGE("Failed to allocate a Vulkan transfer command buffer");
+      dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
+      return false;
+    }
+    transfer_command_buffers_writable_.push_back(command_buffer);
+  }
+  CommandBuffer command_buffer = transfer_command_buffers_writable_.back();
+
+  if (dfn.vkResetCommandPool(device, command_buffer.pool, 0) != VK_SUCCESS) {
+    XELOGE("Failed to reset a Vulkan transfer command pool");
+    return false;
+  }
+  VkCommandBufferBeginInfo command_buffer_begin_info;
+  command_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  command_buffer_begin_info.pNext = nullptr;
+  command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  command_buffer_begin_info.pInheritanceInfo = nullptr;
+  if (dfn.vkBeginCommandBuffer(command_buffer.buffer,
+                               &command_buffer_begin_info) != VK_SUCCESS) {
+    XELOGE("Failed to begin a Vulkan transfer command buffer");
+    return false;
+  }
+
+  VkBuffer shared_memory_buffer = shared_memory_->buffer();
+  for (const PendingReadbackCopy& copy : pending_readback_copies_) {
+    VkBufferCopy region = {};
+    region.srcOffset = copy.src_offset;
+    region.dstOffset = 0;
+    region.size = copy.size;
+    dfn.vkCmdCopyBuffer(command_buffer.buffer, shared_memory_buffer,
+                        copy.readback_buffer->buffers[copy.buffer_index], 1,
+                        &region);
+  }
+
+  if (dfn.vkEndCommandBuffer(command_buffer.buffer) != VK_SUCCESS) {
+    XELOGE("Failed to end a Vulkan transfer command buffer");
+    return false;
+  }
+
+  // Wait for the graphics submission that wrote the resolved data into shared
+  // memory (the semaphore also makes those writes visible to the transfer
+  // queue). Shared memory is created with concurrent sharing for this.
+  VkPipelineStageFlags wait_stage_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit_info.waitSemaphoreCount = 1;
+  submit_info.pWaitSemaphores = &graphics_signal_semaphore;
+  submit_info.pWaitDstStageMask = &wait_stage_mask;
+  submit_info.commandBufferCount = 1;
+  submit_info.pCommandBuffers = &command_buffer.buffer;
+
+  const uint64_t transfer_submission =
+      transfer_completion_timeline_.GetUpcomingSubmission();
+  if (transfer_completion_timeline_.AcquireFenceAndSubmit(
+          vulkan_device->queue_family_transfer(), 0, 1, &submit_info) !=
+      VK_SUCCESS) {
+    XELOGE("VulkanCommandProcessor: Failed to submit resolve readback copies");
+    return false;
+  }
+
+  transfer_command_buffers_submitted_.emplace_back(transfer_submission,
+                                                   command_buffer);
+  transfer_command_buffers_writable_.pop_back();
+  transfer_wait_semaphores_in_flight_.emplace_back(transfer_submission,
+                                                   graphics_signal_semaphore);
+  pending_readback_copies_.clear();
+  return true;
+}
+
 bool VulkanCommandProcessor::IssueCopy() {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
@@ -4619,14 +4765,36 @@ bool VulkanCommandProcessor::IssueCopy() {
     uint32_t write_index = rb.current_index;
     uint32_t size = AlignReadbackBufferSize(written_length);
 
+     const bool use_delayed_sync =
+        (readback_mode == ReadbackResolveMode::kFast ||
+         readback_mode == ReadbackResolveMode::kSome);
+    // fast/some can offload the copy to the dedicated transfer queue (DMA
+    // engine) so it runs at full bandwidth in parallel with rendering instead
+    // of serializing on the graphics queue.
+    const bool use_transfer_queue =
+        use_delayed_sync &&
+        vulkan_device->queue_family_transfer() != UINT32_MAX;
+
     // Allocate/resize write buffer if needed
     if (size > rb.sizes[write_index]) {
-      // Create buffer with TRANSFER_DST usage for copying from GPU.
+       // Create buffer with TRANSFER_DST usage for copying from GPU. When a
+      // transfer queue exists it is written by both the graphics queue (sync
+      // fallback) and the transfer queue, so share it concurrently between
+      // them.
+      const uint32_t readback_queue_families[2] = {
+          vulkan_device->queue_family_graphics_compute(),
+          vulkan_device->queue_family_transfer()};
       VkBufferCreateInfo buffer_info = {};
       buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
       buffer_info.size = size;
       buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+       if (vulkan_device->queue_family_transfer() != UINT32_MAX) {
+        buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        buffer_info.queueFamilyIndexCount = 2;
+        buffer_info.pQueueFamilyIndices = readback_queue_families;
+      } else {
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+      }
 
       VkBuffer new_buffer;
       if (dfn.vkCreateBuffer(device, &buffer_info, nullptr, &new_buffer) !=
@@ -4685,7 +4853,8 @@ bool VulkanCommandProcessor::IssueCopy() {
       }
 
       // Clean up old buffer if exists
-      // Must wait for GPU to finish using the buffer before destroying it
+      // Must wait for GPU to finish using the buffer before destroying it -
+      // both the graphics queue and any in-flight transfer-queue copy to it.
       if (rb.buffers[write_index] != VK_NULL_HANDLE) {
         if (!AwaitAllQueueOperationsCompletion()) {
           XELOGE(
@@ -4696,6 +4865,7 @@ bool VulkanCommandProcessor::IssueCopy() {
           PopDebugMarker();
           return true;
         }
+         transfer_completion_timeline_.AwaitAllSubmissions();
       }
       if (rb.mapped_data[write_index] != nullptr) {
         dfn.vkUnmapMemory(device, rb.memories[write_index]);
@@ -4722,74 +4892,126 @@ bool VulkanCommandProcessor::IssueCopy() {
       }
     }
 
-    VkBuffer shared_memory_buffer = shared_memory_->buffer();
+    if (use_transfer_queue) {
+      uint32_t read_index = 1 - write_index;
+      bool read_available = rb.buffers[read_index] != VK_NULL_HANDLE &&
+                            written_length <= rb.sizes[read_index] &&
+                            rb.mapped_data[read_index] != nullptr;
+      if (read_available) {
+        // "some" only reads on a cache miss, so a cache hit does nothing.
+        if (readback_mode != ReadbackResolveMode::kSome) {
+          // "fast" defers the copy to the transfer queue and reads last frame's
+          // buffer without waiting. A later resolve may overwrite shared memory
+          // while the copy reads it. Accepted as the documented approximate
+          // tradeoff for fast/some (full stays synchronous on graphics).
+          pending_readback_copies_.push_back(
+              {&rb, write_index, written_address, written_length});
+          uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
+          memory::vastcpy(dest_ptr,
+                          static_cast<uint8_t*>(rb.mapped_data[read_index]),
+                          written_length);
+        }
+      } else {
+        // No previous buffer yet (first use or resize). Copy and read
+        // synchronously on the graphics queue so on-demand readback
+        // (screenshots) still gets data this frame.
+        VkBuffer shared_memory_buffer = shared_memory_->buffer();
+        shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+        PushBufferMemoryBarrier(
+            rb.buffers[write_index], 0, VK_WHOLE_SIZE,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false);
+        SubmitBarriers(true);
+        InsertDebugMarker("Resolve Readback (sync): 0x%08X, %u bytes",
+                          written_address, written_length);
+        VkBufferCopy copy_region = {};
+        copy_region.srcOffset = written_address;
+        copy_region.dstOffset = 0;
+        copy_region.size = written_length;
+        deferred_command_buffer_.CmdVkCopyBuffer(
+            shared_memory_buffer, rb.buffers[write_index], 1, &copy_region);
+        if (!AwaitAllQueueOperationsCompletion()) {
+          XELOGE(
+              "VulkanCommandProcessor: Failed to complete queue operations for "
+              "resolve readback fallback");
+          PopDebugMarker();
+          return true;
+        }
+        if (rb.mapped_data[write_index] != nullptr) {
+          uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
+          memory::vastcpy(dest_ptr,
+                          static_cast<uint8_t*>(rb.mapped_data[write_index]),
+                          written_length);
+        }
+      }
+    } else {
+      VkBuffer shared_memory_buffer = shared_memory_->buffer();
 
-    // Ensure shared memory is ready for transfer and end any active render
-    // pass.
-    shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
-    // Sync against any prior write to this readback buffer.
-    PushBufferMemoryBarrier(
-        rb.buffers[write_index], 0, VK_WHOLE_SIZE,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false);
-    SubmitBarriers(true);
+      // Ensure shared memory is ready for transfer and end any active render
+      // pass.
+      shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+      // Sync against any prior write to this readback buffer.
+      PushBufferMemoryBarrier(
+          rb.buffers[write_index], 0, VK_WHOLE_SIZE,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+          VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false);
+      SubmitBarriers(true);
 
-    InsertDebugMarker("Resolve Readback: 0x%08X, %u bytes", written_address,
-                      written_length);
+      InsertDebugMarker("Resolve Readback: 0x%08X, %u bytes", written_address,
+                        written_length);
 
-    // Copy GPU buffer → staging buffer.
-    VkBufferCopy copy_region = {};
-    copy_region.srcOffset = written_address;
-    copy_region.dstOffset = 0;
-    copy_region.size = written_length;
+      // Copy GPU buffer → staging buffer.
+      VkBufferCopy copy_region = {};
+      copy_region.srcOffset = written_address;
+      copy_region.dstOffset = 0;
+      copy_region.size = written_length;
 
     deferred_command_buffer_.CmdVkCopyBuffer(
-        shared_memory_buffer, rb.buffers[write_index], 1, &copy_region);
+          shared_memory_buffer, rb.buffers[write_index], 1, &copy_region);
 
-    bool use_delayed_sync = (readback_mode == ReadbackResolveMode::kFast ||
-                             readback_mode == ReadbackResolveMode::kSome);
-    uint32_t read_index = write_index;
-
-    if (use_delayed_sync) {
-      // Use previous frame's data (avoid stall)
-      read_index = 1 - write_index;
-    } else {
-      // Wait for GPU to finish (accurate but slow)
-      if (!AwaitAllQueueOperationsCompletion()) {
-        XELOGE(
-            "VulkanCommandProcessor: Failed to complete queue operations for "
-            "resolve readback");
-        PopDebugMarker();
-        return true;
+     uint32_t read_index = write_index;
+      if (use_delayed_sync) {
+        // Use previous frame's data (avoid stall)
+        read_index = 1 - write_index;
+      } else {
+        // Wait for GPU to finish (accurate but slow)
+        if (!AwaitAllQueueOperationsCompletion()) {
+          XELOGE(
+              "VulkanCommandProcessor: Failed to complete queue operations for "
+              "resolve readback");
+          PopDebugMarker();
+          return true;
+        }
       }
-    }
 
     bool is_cache_miss = false;
-    // If using delayed sync but previous buffer doesn't exist, use current
-    // buffer with sync as fallback
-    if (use_delayed_sync && (rb.buffers[read_index] == VK_NULL_HANDLE ||
-                             written_length > rb.sizes[read_index])) {
-      is_cache_miss = true;
-      read_index = write_index;
-      if (!AwaitAllQueueOperationsCompletion()) {
-        XELOGE(
-            "VulkanCommandProcessor: Failed to complete queue operations for "
-            "resolve readback fallback");
-        PopDebugMarker();
-        return true;
+      // If using delayed sync but previous buffer doesn't exist, use current
+      // buffer with sync as fallback
+      if (use_delayed_sync && (rb.buffers[read_index] == VK_NULL_HANDLE ||
+                               written_length > rb.sizes[read_index])) {
+        is_cache_miss = true;
+        read_index = write_index;
+        if (!AwaitAllQueueOperationsCompletion()) {
+          XELOGE(
+              "VulkanCommandProcessor: Failed to complete queue operations for "
+              "resolve readback fallback");
+          PopDebugMarker();
+          return true;
+        }
       }
-    }
 
     bool should_copy =
-        (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
-    if (should_copy && rb.buffers[read_index] != VK_NULL_HANDLE &&
-        written_length <= rb.sizes[read_index] &&
-        rb.mapped_data[read_index] != nullptr) {
-      uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
-      memory::vastcpy(dest_ptr,
-                      static_cast<uint8_t*>(rb.mapped_data[read_index]),
-                      written_length);
+          (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
+      if (should_copy && rb.buffers[read_index] != VK_NULL_HANDLE &&
+          written_length <= rb.sizes[read_index] &&
+          rb.mapped_data[read_index] != nullptr) {
+        uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
+        memory::vastcpy(dest_ptr,
+                        static_cast<uint8_t*>(rb.mapped_data[read_index]),
+                        written_length);
+      }
     }
 
     // Swap buffer index for next time this specific resolve address is used
@@ -6447,6 +6669,30 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
 
     const uint64_t submission_index = GetCurrentSubmission();
 
+    // If resolve readback copies are queued for the dedicated transfer queue,
+    // have this graphics submission signal a semaphore the transfer copies wait
+    // on, so they see the shared-memory writes produced here.
+    VkSemaphore transfer_signal_semaphore = VK_NULL_HANDLE;
+    if (vulkan_device->queue_family_transfer() != UINT32_MAX &&
+        !pending_readback_copies_.empty()) {
+      ReclaimCompletedTransferResources();
+      if (!transfer_wait_semaphores_free_.empty()) {
+        transfer_signal_semaphore = transfer_wait_semaphores_free_.back();
+        transfer_wait_semaphores_free_.pop_back();
+      } else {
+        VkSemaphoreCreateInfo semaphore_create_info = {
+            VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        if (dfn.vkCreateSemaphore(device, &semaphore_create_info, nullptr,
+                                  &transfer_signal_semaphore) != VK_SUCCESS) {
+          XELOGE("Failed to create a graphics->transfer readback semaphore");
+          transfer_signal_semaphore = VK_NULL_HANDLE;
+          // Without the semaphore the copies can't be flushed, so drop them
+          // rather than leak them into the next frame.
+          pending_readback_copies_.clear();
+        }
+      }
+    }
+
     VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     if (!current_submission_wait_semaphores_.empty()) {
       submit_info.waitSemaphoreCount =
@@ -6457,6 +6703,12 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     }
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &command_buffer.buffer;
+
+    if (transfer_signal_semaphore != VK_NULL_HANDLE) {
+      submit_info.signalSemaphoreCount = 1;
+      submit_info.pSignalSemaphores = &transfer_signal_semaphore;
+    }
+
     const VkResult submit_result = completion_timeline_.AcquireFenceAndSubmit(
         vulkan_device->queue_family_graphics_compute(), 0, 1, &submit_info);
     if (submit_result != VK_SUCCESS) {
@@ -6484,6 +6736,13 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
         device_lost_ = true;
         graphics_system_->OnHostGpuLossFromAnyThread(true);
       }
+
+      // The graphics work that the queued readback copies depend on wasn't
+      // submitted, so drop them. The unsignaled semaphore can be reused.
+      if (transfer_signal_semaphore != VK_NULL_HANDLE) {
+        transfer_wait_semaphores_free_.push_back(transfer_signal_semaphore);
+      }
+      pending_readback_copies_.clear();
       return false;
     }
     current_submission_wait_stage_masks_.clear();
@@ -6494,6 +6753,16 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     current_submission_wait_semaphores_.clear();
     command_buffers_submitted_.emplace_back(submission_index, command_buffer);
     command_buffers_writable_.pop_back();
+
+     // The graphics work is submitted and will signal the semaphore - run the
+    // queued resolve readback copies on the dedicated transfer queue.
+    if (transfer_signal_semaphore != VK_NULL_HANDLE) {
+      if (!SubmitReadbackCopiesToTransferQueue(transfer_signal_semaphore)) {
+        // The semaphore was already signaled by the graphics submit and can't
+        // be safely reused; drop it and the copies (rare, device-loss path).
+        pending_readback_copies_.clear();
+      }
+    }
 
     submission_history_[submission_history_next_] = submission_in_progress_;
     submission_history_next_ =

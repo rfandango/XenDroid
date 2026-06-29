@@ -320,6 +320,11 @@ class VulkanDevice {
     return queue_family_sparse_binding_;
   }
 
+  // Dedicated transfer-only queue family (the DMA / copy engine), or UINT32_MAX
+  // if the device has no transfer-only family. Distinct from
+  // queue_family_graphics_compute().
+  uint32_t queue_family_transfer() const { return queue_family_transfer_; }
+
   Queue::Acquisition AcquireQueue(const uint32_t queue_family_index,
                                   const uint32_t queue_index) const {
     return queue_families()[queue_family_index].queues[queue_index]->Acquire();
@@ -379,6 +384,7 @@ class VulkanDevice {
   std::vector<QueueFamily> queue_families_;
   uint32_t queue_family_graphics_compute_ = UINT32_MAX;
   uint32_t queue_family_sparse_binding_ = UINT32_MAX;
+  uint32_t queue_family_transfer_ = UINT32_MAX;
 
   MemoryTypes memory_types_;
 
