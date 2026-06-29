@@ -56,31 +56,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 1024
-          remove-dotnet: true
-          remove-android: false
-          remove-haskell: true
-          remove-codeql: true
+    
 
-      - name: Check Android SDK
+      ##################################################################
+      # Android Command Line Tools
+      ##################################################################
+      - name: Install Android command-line tools
         run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          which sdkmanager || true
-          sdkmanager --version
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
 
-      ##################################################################
-      # Android SDK + NDK + CMake
-      ##################################################################
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip
+          unzip -q commandlinetools-linux-12266719_latest.zip
+
+          mv cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
+
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Install SDK Components
         run: |
+          yes | sdkmanager --licenses
+
           sdkmanager \
             "platforms;android-35" \
             "build-tools;35.0.0" \
