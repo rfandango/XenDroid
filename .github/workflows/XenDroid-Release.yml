@@ -63,7 +63,7 @@ jobs:
           root-reserve-mb: 2048
           temp-reserve-mb: 1024
           remove-dotnet: true
-          remove-android: true
+          remove-android: false
           remove-haskell: true
           remove-codeql: true
 
