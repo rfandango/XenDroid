@@ -1,22 +1,11 @@
 name: XenDroid Release
-
 on:
-  pull_request:
-    branches:
-      - main
-
   push:
-    branches:
-      - main
     tags:
       - 'v*'
-
 jobs:
   build-release:
     runs-on: ubuntu-24.04
-
-    permissions:
-      contents: write
 
     env:
       ANDROID_NDK_VERSION: 27.2.12479018
@@ -29,6 +18,21 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Restore CMake cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            emulator-core/.cxx
+            emulator-core/build/.cmake
+          key: >
+            ${{ runner.os }}-cmake-${{ hashFiles(
+              'emulator-core/src/main/cpp/CMakeLists.txt',
+              'emulator-core/src/main/cpp/**/*.cmake',
+              'emulator-core/src/main/cpp/**/CMakeLists.txt'
+            ) }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
       ##################################################################
       # JDK 21
       ##################################################################
@@ -36,7 +40,8 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: '21'
+          cache: gradle
 
       ##################################################################
       # Python
@@ -44,7 +49,17 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: '3.x'
+      
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 2048
+          temp-reserve-mb: 1024
+          remove-dotnet: true
+          remove-android: true
+          remove-haskell: true
+          remove-codeql: true
 
       ##################################################################
       # Android SDK + NDK + CMake
@@ -70,7 +85,7 @@ jobs:
             glslang-tools \
             spirv-tools
 
-      - name: Verify Vulkan Tools
+      - name: Verify SPIR-V Tools
         run: |
           glslangValidator --version
           spirv-opt --version
@@ -89,15 +104,19 @@ jobs:
       ##################################################################
       - name: Decode keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" \
+            | base64 -d > release.keystore
 
       ##################################################################
-      # Build
+      # Build Release
       ##################################################################
-      - name: Build Release APK
+      - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew \
+            --build-cache \
+            --parallel \
+            assembleRelease
 
       ##################################################################
       # Sign APK
@@ -113,42 +132,26 @@ jobs:
             --key-pass pass:${{ secrets.KEY_PASSWORD }} \
             "$APK"
 
-      - name: Verify APK Signature
+      - name: Verify Signature
         run: |
           APK=$(find . -name "*release*.apk" | head -n 1)
+
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
 
       ##################################################################
-      # Rename APK
+      # Upload artifact
       ##################################################################
-      - name: Get Short SHA
+      - name: Set short SHA
         id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Rename APK
         run: |
           APK=$(find . -name "*release*.apk" | head -n 1)
           mv "$APK" "XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk"
 
-      ##################################################################
-      # Upload Artifact (PR + main)
-      ##################################################################
-      - name: Upload Artifact
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: XenDroid_Release_${{ steps.vars.outputs.sha_short }}
           path: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
-          retention-days: 30
-
-      ##################################################################
-      # Publish GitHub Release (only tags)
-      ##################################################################
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
