@@ -1,0 +1,178 @@
+name: XenDroid Debug
+on:
+  pull_request:
+    branches:
+      - main
+
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+build-debug:
+      if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+
+      runs-on: ubuntu-24.04
+      env:
+        ANDROID_NDK_VERSION: 27.2.12479018
+        ANDROID_PLATFORM: android-35
+        CMAKE_BUILD_PARALLEL_LEVEL: 2
+
+      steps:
+        - name: Check APK keystore
+          run: |
+            if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 secret is not configured."
+              exit 1
+            fi
+        
+        - name: Checkout
+          uses: actions/checkout@v4
+          with:
+            submodules: recursive
+            fetch-depth: 0
+
+        - name: Maximize build space
+          uses: easimon/maximize-build-space@v10
+          with:
+            root-reserve-mb: 2048
+            temp-reserve-mb: 1024
+            remove-dotnet: true
+            remove-haskell: true
+            remove-codeql: true
+            remove-android: false
+
+        ##################################################################
+        # JDK 21
+        ##################################################################
+        - name: Setup JDK 21
+          uses: actions/setup-java@v4
+          with:
+            distribution: temurin
+            java-version: '21'
+            cache: gradle
+
+        ##################################################################
+        # Python
+        ##################################################################
+        - name: Setup Python
+          uses: actions/setup-python@v5
+          with:
+            python-version: '3.x'
+
+        ##################################################################
+        # Install tools
+        ##################################################################
+      
+        - name: Install tools
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y ccache glslang-tools spirv-tools
+
+            ccache --max-size=2G
+            ccache --zero-stats
+
+        - name: Verify SPIR-V Tools
+          run: |
+            glslangValidator --version
+            spirv-opt --version
+            spirv-dis --version
+
+        ##################################################################
+        # Android Command Line Tools
+        ##################################################################
+        - name: Install Android command-line tools
+          run: |
+            mkdir -p "$HOME/android-sdk/cmdline-tools"
+
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip
+            unzip -q commandlinetools-linux-12266719_latest.zip
+
+            mv cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
+
+            echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+            echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+        - name: Install SDK Components
+          run: |
+            yes | sdkmanager --licenses
+
+            sdkmanager \
+              "platforms;android-35" \
+              "build-tools;35.0.0" \
+              "ndk;27.2.12479018" \
+              "cmake;3.30.3"
+
+        ##################################################################
+        # local.properties
+        ##################################################################
+        - name: Generate local.properties
+          run: |
+            echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
+            echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.30.3" >> local.properties
+
+        ##################################################################
+        # Restore keystore
+        ##################################################################
+        - name: Decode keystore
+          run: |
+            if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 secret is not configured."
+              exit 1
+            fi
+
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release.keystore
+
+            if [ ! -s release.keystore ]; then
+              echo "::error::Failed to decode keystore or keystore is empty."
+              exit 1
+            fi
+
+        ##################################################################
+        # Build Release
+        ##################################################################
+        - name: Build APK
+          run: |
+            chmod +x gradlew
+            ./gradlew \
+              --build-cache \
+              assembleRelease
+
+        ##################################################################
+        # Sign APK
+        ##################################################################
+        - name: Sign APK
+          run: |
+            APK=$(find . -name "*release*.apk" | head -n 1)
+
+            "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" sign \
+              --ks release.keystore \
+              --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+              --ks-pass pass:${{ secrets.KEYSTORE_PASSWORD }} \
+              --key-pass pass:${{ secrets.KEY_PASSWORD }} \
+              "$APK"
+
+        - name: Verify Signature
+          run: |
+            APK=$(find . -name "*release*.apk" | head -n 1)
+
+            "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
+
+        ##################################################################
+        # Upload artifact
+        ##################################################################
+        - name: Set short SHA
+          id: vars
+          run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+        - name: Rename APK
+          run: |
+            APK=$(find . -name "*release*.apk" | head -n 1)
+            mv "$APK" "XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk"
+
+        - name: Upload APK
+          uses: actions/upload-artifact@v4
+          with:
+            name: XenDroid_Release_${{ steps.vars.outputs.sha_short }}
+            path: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk

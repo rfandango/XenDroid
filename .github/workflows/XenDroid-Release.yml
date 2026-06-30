@@ -1,4 +1,4 @@
-name: XenDroid Build
+name: XenDroid Release
 on:
   pull_request:
     branches:
@@ -43,16 +43,6 @@ jobs:
           remove-codeql: true
           remove-android: false
 
-      - name: Cache Android SDK
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/android-sdk/platforms
-            ~/android-sdk/build-tools
-            ~/android-sdk/ndk
-            ~/android-sdk/cmake
-          key: android-sdk-${{ runner.os }}-35-27.2.12479018
-
       ##################################################################
       # JDK 21
       ##################################################################
@@ -83,14 +73,11 @@ jobs:
           ccache --max-size=2G
           ccache --zero-stats
 
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ${{ runner.os }}-ccache-${{ github.job }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ github.job }}-
-            ${{ runner.os }}-ccache-
+      - name: Verify SPIR-V Tools
+        run: |
+          glslangValidator --version
+          spirv-opt --version
+          spirv-dis --version
 
       ##################################################################
       # Android Command Line Tools
@@ -116,12 +103,6 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;27.2.12479018" \
             "cmake;3.30.3"
-
-      - name: Verify SPIR-V Tools
-        run: |
-          glslangValidator --version
-          spirv-opt --version
-          spirv-dis --version
 
       ##################################################################
       # local.properties
@@ -149,22 +130,6 @@ jobs:
           fi
 
       ##################################################################
-      # Configure Ccache
-      ##################################################################
-
-      - name: Enable ccache
-        run: |
-          echo "org.gradle.jvmargs=-Xmx4g" >> gradle.properties
-          echo "android.experimental.cmake.cCompilerLauncher=ccache" >> gradle.properties
-          echo "android.experimental.cmake.cppCompilerLauncher=ccache" >> gradle.properties
-
-      - name: Configure ccache
-        run: |
-          echo "CC=ccache clang" >> $GITHUB_ENV
-          echo "CXX=ccache clang++" >> $GITHUB_ENV
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-
-      ##################################################################
       # Build Release
       ##################################################################
       - name: Build APK
@@ -173,12 +138,6 @@ jobs:
           ./gradlew \
             --build-cache \
             assembleRelease
-
-      - name: ccache statistics
-        if: always()
-        run: |
-          ccache --show-config
-          ccache --show-stats
 
       ##################################################################
       # Sign APK
@@ -222,184 +181,3 @@ jobs:
       if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
       runs-on: ubuntu-24.04
 
-      env:
-        ANDROID_NDK_VERSION: 27.2.12479018
-        ANDROID_PLATFORM: android-35
-        CMAKE_BUILD_PARALLEL_LEVEL: 2
-
-      steps:
-        - name: Checkout
-          uses: actions/checkout@v4
-          with:
-            submodules: recursive
-            fetch-depth: 0
-
-        - name: Inspect repository
-          run: |
-            echo "PWD=$(pwd)"
-            ls -la
-            find . -name gradlew
-            find . -name gradle-wrapper.properties
-            find . -name build.gradle
-            find . -name build.gradle.kts
-
-        - name: Maximize build space
-          uses: easimon/maximize-build-space@v10
-          with:
-            root-reserve-mb: 2048
-            temp-reserve-mb: 1024
-            remove-dotnet: true
-            remove-haskell: true
-            remove-codeql: true
-            remove-android: false
-
-        - name: Cache Android SDK
-          uses: actions/cache@v4
-          with:
-            path: |
-              ~/android-sdk/platforms
-              ~/android-sdk/build-tools
-              ~/android-sdk/ndk
-              ~/android-sdk/cmake
-            key: android-sdk-${{ runner.os }}-35-27.2.12479018
-
-        ##################################################################
-        # JDK 21
-        ##################################################################
-        - name: Setup JDK 21
-          uses: actions/setup-java@v4
-          with:
-            distribution: temurin
-            java-version: '21'
-            cache: gradle
-
-        ##################################################################
-        # Python
-        ##################################################################
-        - name: Setup Python
-          uses: actions/setup-python@v5
-          with:
-            python-version: '3.x'
-
-        ##################################################################
-        # Install tools
-        ##################################################################
-      
-        - name: Install tools
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y ccache glslang-tools spirv-tools
-
-        - name: Restore ccache
-          uses: actions/cache@v4
-          with:
-            path: ~/.ccache
-            key: ${{ runner.os }}-ccache-${{ github.job }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
-            restore-keys: |
-              ${{ runner.os }}-ccache-${{ github.job }}-
-              ${{ runner.os }}-ccache-
-
-        - name: Initialize ccache
-          run: |
-            ccache --max-size=2G
-            ccache --zero-stats
-
-        - name: Cache Android SDK
-          uses: actions/cache@v4
-          with:
-            path: |
-              ~/android-sdk/platforms
-              ~/android-sdk/build-tools
-              ~/android-sdk/ndk
-              ~/android-sdk/cmake
-            key: android-sdk-${{ runner.os }}-35-27.2.12479018
-
-        ##################################################################
-        # Android Command Line Tools
-        ##################################################################
-        - name: Install Android command-line tools
-          run: |
-            mkdir -p "$HOME/android-sdk/cmdline-tools"
-
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip
-            unzip -q commandlinetools-linux-12266719_latest.zip
-
-            mv cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
-
-            echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-            echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-
-        - name: Install SDK Components
-          run: |
-            yes | sdkmanager --licenses
-
-            sdkmanager \
-              "platforms;android-35" \
-              "build-tools;35.0.0" \
-              "ndk;27.2.12479018" \
-              "cmake;3.30.3"
-
-        - name: Verify SPIR-V Tools
-          run: |
-            glslangValidator --version
-            spirv-opt --version
-            spirv-dis --version
-
-        ##################################################################
-        # local.properties
-        ##################################################################
-        - name: Generate local.properties
-          run: |
-            echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
-            echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.30.3" >> local.properties
-
-
-        ##################################################################
-        # Configure Ccache
-        ##################################################################
-
-        - name: Enable ccache
-          run: |
-            echo "org.gradle.jvmargs=-Xmx4g" >> gradle.properties
-            echo "android.experimental.cmake.cCompilerLauncher=ccache" >> gradle.properties
-            echo "android.experimental.cmake.cppCompilerLauncher=ccache" >> gradle.properties
-
-        - name: Configure ccache
-          run: |
-            echo "CC=ccache clang" >> $GITHUB_ENV
-            echo "CXX=ccache clang++" >> $GITHUB_ENV
-            echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-
-        ##################################################################
-        # Build Debug
-        ##################################################################
-        - name: Build APK
-          run: |
-            chmod +x gradlew
-            ./gradlew \
-              --build-cache \
-              assembleDebug
-
-        - name: ccache statistics
-          if: always()
-          run: |
-            ccache --show-config
-            ccache --show-stats
-
-        ##################################################################
-        # Upload artifact
-        ##################################################################
-        - name: Set short SHA
-          id: vars
-          run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-        - name: Rename APK
-          run: |
-            APK=$(find . -name "*debug*.apk" | head -n 1)
-            mv "$APK" "XenDroid_Debug_${{ steps.vars.outputs.sha_short }}.apk"
-
-        - name: Upload APK
-          uses: actions/upload-artifact@v4
-          with:
-            name: XenDroid_Debug_${{ steps.vars.outputs.sha_short }}
-            path: XenDroid_Debug_${{ steps.vars.outputs.sha_short }}.apk
