@@ -175,8 +175,3 @@ jobs:
         with:
           name: XenDroid_Release_${{ steps.vars.outputs.sha_short }}
           path: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
-
-  build-debug:
-      if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
-      runs-on: ubuntu-24.04
-
