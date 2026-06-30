@@ -1,4 +1,4 @@
-name: XenDroid Release
+name: XenDroid Build
 on:
   pull_request:
     branches:
@@ -218,19 +218,6 @@ jobs:
           name: XenDroid_Release_${{ steps.vars.outputs.sha_short }}
           path: XenDroid_Release_${{ steps.vars.outputs.sha_short }}.apk
 
-
-name: XenDroid Debug
-on:
-  pull_request:
-    branches:
-      - main
-
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
-      
   build-debug:
       if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
       runs-on: ubuntu-24.04
