@@ -17,6 +17,7 @@ jobs:
     env:
       ANDROID_NDK_VERSION: 27.2.12479018
       ANDROID_PLATFORM: android-35
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
 
     steps:
       - name: Check APK keystore
@@ -32,20 +33,25 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Restore CMake cache
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 2048
+          temp-reserve-mb: 1024
+          remove-dotnet: true
+          remove-haskell: true
+          remove-codeql: true
+          remove-android: false
+
+      - name: Cache Android SDK
         uses: actions/cache@v4
         with:
           path: |
-            emulator-core/.cxx
-            emulator-core/build/.cmake
-          key: >
-            ${{ runner.os }}-cmake-${{ hashFiles(
-              'emulator-core/src/main/cpp/CMakeLists.txt',
-              'emulator-core/src/main/cpp/**/*.cmake',
-              'emulator-core/src/main/cpp/**/CMakeLists.txt'
-            ) }}
-          restore-keys: |
-            ${{ runner.os }}-cmake-
+            ~/android-sdk/platforms
+            ~/android-sdk/build-tools
+            ~/android-sdk/ndk
+            ~/android-sdk/cmake
+          key: android-sdk-${{ runner.os }}-35-27.2.12479018
 
       ##################################################################
       # JDK 21
@@ -64,7 +70,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      ##################################################################
+      # Install tools
+      ##################################################################
     
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache glslang-tools spirv-tools
+
+          ccache --max-size=2G
+          ccache --zero-stats
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ github.job }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ github.job }}-
+            ${{ runner.os }}-ccache-
 
       ##################################################################
       # Android Command Line Tools
@@ -90,16 +116,6 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;27.2.12479018" \
             "cmake;3.30.3"
-
-      ##################################################################
-      # Vulkan SDK
-      ##################################################################
-      - name: Install Vulkan tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            glslang-tools \
-            spirv-tools
 
       - name: Verify SPIR-V Tools
         run: |
@@ -133,6 +149,22 @@ jobs:
           fi
 
       ##################################################################
+      # Configure Ccache
+      ##################################################################
+
+      - name: Enable ccache
+        run: |
+          echo "org.gradle.jvmargs=-Xmx4g" >> gradle.properties
+          echo "android.experimental.cmake.cCompilerLauncher=ccache" >> gradle.properties
+          echo "android.experimental.cmake.cppCompilerLauncher=ccache" >> gradle.properties
+
+      - name: Configure ccache
+        run: |
+          echo "CC=ccache clang" >> $GITHUB_ENV
+          echo "CXX=ccache clang++" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      ##################################################################
       # Build Release
       ##################################################################
       - name: Build APK
@@ -140,8 +172,13 @@ jobs:
           chmod +x gradlew
           ./gradlew \
             --build-cache \
-            --parallel \
             assembleRelease
+
+      - name: ccache statistics
+        if: always()
+        run: |
+          ccache --show-config
+          ccache --show-stats
 
       ##################################################################
       # Sign APK
@@ -188,6 +225,7 @@ jobs:
       env:
         ANDROID_NDK_VERSION: 27.2.12479018
         ANDROID_PLATFORM: android-35
+        CMAKE_BUILD_PARALLEL_LEVEL: 2
 
       steps:
         - name: Checkout
@@ -196,20 +234,25 @@ jobs:
             submodules: recursive
             fetch-depth: 0
 
-        - name: Restore CMake cache
+        - name: Maximize build space
+          uses: easimon/maximize-build-space@v10
+          with:
+            root-reserve-mb: 2048
+            temp-reserve-mb: 1024
+            remove-dotnet: true
+            remove-haskell: true
+            remove-codeql: true
+            remove-android: false
+
+        - name: Cache Android SDK
           uses: actions/cache@v4
           with:
             path: |
-              emulator-core/.cxx
-              emulator-core/build/.cmake
-            key: >
-              ${{ runner.os }}-cmake-${{ hashFiles(
-                'emulator-core/src/main/cpp/CMakeLists.txt',
-                'emulator-core/src/main/cpp/**/*.cmake',
-                'emulator-core/src/main/cpp/**/CMakeLists.txt'
-              ) }}
-            restore-keys: |
-              ${{ runner.os }}-cmake-
+              ~/android-sdk/platforms
+              ~/android-sdk/build-tools
+              ~/android-sdk/ndk
+              ~/android-sdk/cmake
+            key: android-sdk-${{ runner.os }}-35-27.2.12479018
 
         ##################################################################
         # JDK 21
@@ -228,7 +271,39 @@ jobs:
           uses: actions/setup-python@v5
           with:
             python-version: '3.x'
+
+        ##################################################################
+        # Install tools
+        ##################################################################
       
+        - name: Install tools
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y ccache glslang-tools spirv-tools
+
+        - name: Restore ccache
+          uses: actions/cache@v4
+          with:
+            path: ~/.ccache
+            key: ${{ runner.os }}-ccache-${{ github.job }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+            restore-keys: |
+              ${{ runner.os }}-ccache-${{ github.job }}-
+              ${{ runner.os }}-ccache-
+
+        - name: Initialize ccache
+          run: |
+            ccache --max-size=2G
+            ccache --zero-stats
+
+        - name: Cache Android SDK
+          uses: actions/cache@v4
+          with:
+            path: |
+              ~/android-sdk/platforms
+              ~/android-sdk/build-tools
+              ~/android-sdk/ndk
+              ~/android-sdk/cmake
+            key: android-sdk-${{ runner.os }}-35-27.2.12479018
 
         ##################################################################
         # Android Command Line Tools
@@ -255,16 +330,6 @@ jobs:
               "ndk;27.2.12479018" \
               "cmake;3.30.3"
 
-        ##################################################################
-        # Vulkan SDK
-        ##################################################################
-        - name: Install Vulkan tools
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y \
-              glslang-tools \
-              spirv-tools
-
         - name: Verify SPIR-V Tools
           run: |
             glslangValidator --version
@@ -279,6 +344,23 @@ jobs:
             echo "sdk.dir=$ANDROID_SDK_ROOT" >> local.properties
             echo "cmake.dir=$ANDROID_SDK_ROOT/cmake/3.30.3" >> local.properties
 
+
+        ##################################################################
+        # Configure Ccache
+        ##################################################################
+
+        - name: Enable ccache
+          run: |
+            echo "org.gradle.jvmargs=-Xmx4g" >> gradle.properties
+            echo "android.experimental.cmake.cCompilerLauncher=ccache" >> gradle.properties
+            echo "android.experimental.cmake.cppCompilerLauncher=ccache" >> gradle.properties
+
+        - name: Configure ccache
+          run: |
+            echo "CC=ccache clang" >> $GITHUB_ENV
+            echo "CXX=ccache clang++" >> $GITHUB_ENV
+            echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
         ##################################################################
         # Build Debug
         ##################################################################
@@ -287,8 +369,13 @@ jobs:
             chmod +x gradlew
             ./gradlew \
               --build-cache \
-              --parallel \
               assembleDebug
+
+        - name: ccache statistics
+          if: always()
+          run: |
+            ccache --show-config
+            ccache --show-stats
 
         ##################################################################
         # Upload artifact
