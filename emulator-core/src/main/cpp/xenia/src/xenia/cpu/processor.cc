@@ -278,7 +278,9 @@ Function* Processor::ResolveFunction(uint32_t address) {
     if (xexmod) {
       auto addr_flags = xexmod->GetInstructionAddressFlags(address);
       if (addr_flags) {
-        addr_flags->was_resolved = 1;
+        InfoCacheFlags bits{};
+        bits.was_resolved = 1;
+        AtomicSetInfoCacheFlags(addr_flags, bits);
       }
     }
 

@@ -10,6 +10,8 @@
 #ifndef XENIA_CPU_XEX_MODULE_H_
 #define XENIA_CPU_XEX_MODULE_H_
 
+#include <atomic>
+#include <cstring>
 #include <string>
 #include <vector>
 #include "xenia/base/mapped_memory.h"
@@ -41,6 +43,15 @@ struct InfoCacheFlags {
 };
 static_assert(sizeof(InfoCacheFlags) == 4,
               "InfoCacheFlags size should be equal to sizeof ppc instruction.");
+
+// The flags share one 32-bit word in a shared mmap and are written by several
+// threads. Set bits atomically so concurrent writes don't lose updates.
+inline void AtomicSetInfoCacheFlags(InfoCacheFlags* slot, InfoCacheFlags bits) {
+  uint32_t mask;
+  std::memcpy(&mask, &bits, sizeof(mask));
+  std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(slot))
+      .fetch_or(mask, std::memory_order_relaxed);
+}
 
 struct XexInfoCache {
   // increment this to invalidate all user infocaches

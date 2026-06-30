@@ -81,6 +81,10 @@ Symbol::Status Module::DeclareSymbol(Symbol::Type type, uint32_t address,
         symbol = new Symbol(Symbol::Type::kVariable, this, address);
         break;
     }
+
+    // Mark in-progress under the lock so concurrent lookups of the same
+    // address spin until the caller finishes declaring it.
+    symbol->set_status(Symbol::Status::kDeclaring);
     map_[address] = symbol;
     list_.emplace_back(symbol);
     status = Symbol::Status::kNew;

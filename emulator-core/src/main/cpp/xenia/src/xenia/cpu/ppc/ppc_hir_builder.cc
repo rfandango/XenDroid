@@ -600,7 +600,9 @@ void PPCHIRBuilder::SetReturnAddress(Value* value) {
       if (xexmod) {
         auto flags = xexmod->GetInstructionAddressFlags(value->AsUint32());
         if (flags) {
-          flags->is_return_site = true;
+          InfoCacheFlags bits{};
+          bits.is_return_site = true;
+          AtomicSetInfoCacheFlags(flags, bits);
         }
       }
     }

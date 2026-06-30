@@ -52,6 +52,8 @@ bool SharedMemory::InitializeCommon() {
   memset(valid_buffer_b_, 0, 8 * num_system_page_flags_entries);
   memset(system_page_flags_valid_and_gpu_written_, 0,
          8 * num_system_page_flags_entries);
+  watch_blind_pages_.assign(num_system_page_flags_, 0);
+  has_watch_blind_pages_ = false;
 
   // Initialize atomics - buffer_a is active, buffer_b is staging
   active_valid_flags_.store(valid_buffer_a_, std::memory_order_relaxed);
@@ -123,6 +125,9 @@ void SharedMemory::ShutdownCommon() {
 
   system_page_flags_valid_and_gpu_written_ = nullptr;
   num_system_page_flags_ = 0;
+  
+  watch_blind_pages_ = {};
+  has_watch_blind_pages_ = false;
 }
 
 void SharedMemory::InvalidateAllPages() {

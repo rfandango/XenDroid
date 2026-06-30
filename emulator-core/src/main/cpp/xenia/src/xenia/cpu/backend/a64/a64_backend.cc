@@ -1098,7 +1098,9 @@ void A64Backend::RecordMMIOExceptionForGuestInstruction(void* host_address) {
         cpu::InfoCacheFlags* icf =
             xex_guest_module->GetInstructionAddressFlags(guestaddr);
         if (icf) {
-          icf->accessed_mmio = true;
+          cpu::InfoCacheFlags bits{};
+          bits.accessed_mmio = true;
+          cpu::AtomicSetInfoCacheFlags(icf, bits);
         }
       }
     }
