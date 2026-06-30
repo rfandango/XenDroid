@@ -234,6 +234,15 @@ jobs:
             submodules: recursive
             fetch-depth: 0
 
+        - name: Inspect repository
+          run: |
+            echo "PWD=$(pwd)"
+            ls -la
+            find . -name gradlew
+            find . -name gradle-wrapper.properties
+            find . -name build.gradle
+            find . -name build.gradle.kts
+
         - name: Maximize build space
           uses: easimon/maximize-build-space@v10
           with:
