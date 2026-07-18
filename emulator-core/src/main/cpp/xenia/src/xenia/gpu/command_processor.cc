@@ -261,8 +261,10 @@ CommandProcessor::CommandProcessor(GraphicsSystem* graphics_system,
       trace_writer_(graphics_system->memory()->physical_membase()),
       worker_running_(true),
       write_ptr_index_event_(xe::threading::Event::CreateAutoResetEvent(false)),
+      pause_resume_event_(xe::threading::Event::CreateAutoResetEvent(false)),
       write_ptr_index_(0) {
   assert_not_null(write_ptr_index_event_);
+  assert_not_null(pause_resume_event_);
   // Parse and cache readback resolve mode once
   cached_readback_resolve_mode_ = ParseReadbackResolveMode();
   // Parse and cache ZPD mode once.
@@ -407,11 +409,13 @@ void CommandProcessor::RestoreGammaRamp(
 }
 
 void CommandProcessor::CallInThread(std::function<void()> fn) {
-  if (pending_fns_.empty() &&
+  if (!has_pending_fns_.load(std::memory_order_acquire) &&
       kernel::XThread::IsInThread(worker_thread_.get())) {
     fn();
   } else {
+    std::lock_guard<std::mutex> lock(pending_fns_mutex_);
     pending_fns_.push(std::move(fn));
+    has_pending_fns_.store(true, std::memory_order_release);
   }
 }
 
@@ -638,9 +642,20 @@ void CommandProcessor::WorkerThreadMain() {
   }
 
   while (worker_running_) {
-    while (!pending_fns_.empty()) {
-      auto fn = std::move(pending_fns_.front());
-      pending_fns_.pop();
+    while (has_pending_fns_.load(std::memory_order_acquire)) {
+      std::function<void()> fn;
+      {
+        std::lock_guard<std::mutex> lock(pending_fns_mutex_);
+        if (pending_fns_.empty()) {
+          has_pending_fns_.store(false, std::memory_order_release);
+          break;
+        }
+        fn = std::move(pending_fns_.front());
+        pending_fns_.pop();
+        if (pending_fns_.empty()) {
+          has_pending_fns_.store(false, std::memory_order_release);
+        }
+      }
       fn();
     }
 
@@ -664,14 +679,16 @@ void CommandProcessor::WorkerThreadMain() {
         }
         loop_count++;
         write_ptr_index = write_ptr_index_.load();
-      } while (worker_running_ && pending_fns_.empty() &&
+      } while (worker_running_ &&
+               !has_pending_fns_.load(std::memory_order_acquire) &&
                (write_ptr_index == 0xBAADF00D ||
                 read_ptr_index_ == write_ptr_index));
       ReturnFromWait();
       if (fs_stall_begin) {
         frame_time_stats_.stall_ns += FrameStatsNow() - fs_stall_begin;
       }
-      if (!worker_running_ || !pending_fns_.empty()) {
+      if (!worker_running_ ||
+          has_pending_fns_.load(std::memory_order_acquire)) {
         continue;
       }
     }
@@ -701,27 +718,27 @@ void CommandProcessor::WorkerThreadMain() {
 }
 
 void CommandProcessor::Pause() {
-  if (paused_) {
+  if (paused_.exchange(true)) {
     return;
   }
-  paused_ = true;
 
   threading::Fence fence;
-  CallInThread([&fence]() {
+  CallInThread([this, &fence]() {
     fence.Signal();
-    threading::Thread::GetCurrentThread()->Suspend();
+    // Event, not thread Suspend(): a Resume() landing before the worker
+    // suspends would be lost forever; an early event Set() is remembered.
+    threading::Wait(pause_resume_event_.get(), false);
   });
 
   fence.Wait();
 }
 
 void CommandProcessor::Resume() {
-  if (!paused_) {
+  if (!paused_.exchange(false)) {
     return;
   }
-  paused_ = false;
 
-  worker_thread_->thread()->Resume();
+  pause_resume_event_->Set();
 }
 
 bool CommandProcessor::Save(ByteStream* stream) {

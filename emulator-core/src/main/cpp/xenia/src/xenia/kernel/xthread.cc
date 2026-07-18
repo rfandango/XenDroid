@@ -664,18 +664,6 @@ void XThread::Execute() {
   XELOGD("XThread::Execute thid {} (handle={:08X}, '{}', native={:08X})",
          thread_id_, handle(), thread_name_,
          thread_ ? thread_->system_id() : 0);
-#if XE_PLATFORM_xendroid
-  // Background-freeze coverage: a guest thread that begins executing while the
-  // emulator is paused was created during the pause window and so was never seen
-  // by Emulator::Pause's one-shot snapshot. Self-park it here, before any guest
-  // code, on the same suspend primitive Pause/Resume use - otherwise it runs
-  // unsuspended and crashes the half-frozen guest. emu_try_pause() arbitrates
-  // against a concurrent Pause so the thread is suspended at most once.
-  if (thread_ && can_debugger_suspend() &&
-      kernel_state()->emulator()->is_paused() && emu_try_pause()) {
-    thread_->Suspend(nullptr);  // is_current_thread -> WaitSuspended()
-  }
-#endif
   guest_object<X_KTHREAD>()->thread_state = KTHREAD_STATE_RUNNING;
   // Let the kernel know we are starting.
   kernel_state()->OnThreadExecute(this);

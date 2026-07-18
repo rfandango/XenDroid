@@ -345,10 +345,10 @@ static std::atomic<uint32_t> vd_system_command_buffer_identifier_{0};
 static std::atomic<uint32_t> vd_system_command_buffer_id_address_{0};
 
 void VdGetSystemCommandBuffer_entry(lpunknown_t p0_ptr, lpunknown_t p1_ptr) {
-  uint32_t identifier = ++vd_system_command_buffer_identifier_;
-  XELOGI("VdGetSystemCommandBuffer: p0={:08X} p1={:08X} identifier={:08X}",
-         uint32_t(p0_ptr.guest_address()), uint32_t(p1_ptr.guest_address()),
-         identifier);
+  // Report the next pending identifier WITHOUT advancing - only VdSwap
+  // advances, on submission. Advancing per call raced the reclamation poll
+  // ahead of the writeback and the title spun forever.
+  uint32_t identifier = vd_system_command_buffer_identifier_.load() + 1;
   p0_ptr.Zero(0x94);
   xe::store_and_swap<uint32_t>(p0_ptr, 0xBEEF0000);
   xe::store_and_swap<uint32_t>(p1_ptr, identifier);
@@ -544,7 +544,9 @@ void VdSwap_entry(
   // waits (ring-space reclamation) can make progress.
   uint32_t syscmd_id_address = vd_system_command_buffer_id_address_.load();
   if (syscmd_id_address) {
-    uint32_t syscmd_identifier = vd_system_command_buffer_identifier_.load();
+    // This swap submits the pending buffer: advance and write its identifier.
+    uint32_t syscmd_identifier =
+        vd_system_command_buffer_identifier_.fetch_add(1) + 1;
     static std::atomic<uint32_t> log_budget{20};
     if (log_budget.load() > 0 && log_budget-- > 0) {
       XELOGI(

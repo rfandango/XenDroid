@@ -580,7 +580,11 @@ class CommandProcessor {
   std::atomic<bool> worker_running_;
   kernel::object_ref<kernel::XHostThread> worker_thread_;
 
+  // Cross-thread call queue: producers push under the mutex; the worker's hot
+  // loop polls only the atomic flag.
   std::queue<std::function<void()>> pending_fns_;
+  std::mutex pending_fns_mutex_;
+  std::atomic<bool> has_pending_fns_{false};
 
   // MicroEngine binary from PM4_ME_INIT
   std::vector<uint32_t> me_bin_;
@@ -603,7 +607,8 @@ class CommandProcessor {
   Shader* active_vertex_shader_ = nullptr;
   Shader* active_pixel_shader_ = nullptr;
 
-  bool paused_ = false;
+  std::atomic<bool> paused_{false};
+  std::unique_ptr<xe::threading::Event> pause_resume_event_;
 
   // By default (such as for tools), post-processing is disabled.
   // "Desired" is for the external thread managing the post-processing effect.

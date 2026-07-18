@@ -492,7 +492,7 @@ class Emulator {
   std::optional<uint32_t> title_id_;  // Currently running title ID
   std::unique_ptr<kernel::util::GameInfoDatabase> game_info_database_;
 
-  bool paused_;
+  std::atomic<bool> paused_;
   bool restoring_;
   bool relaunching_ = false;
   threading::Fence restore_fence_;  // Fired on restore finish.

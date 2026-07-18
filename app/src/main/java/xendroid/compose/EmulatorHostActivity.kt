@@ -336,6 +336,9 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         if (!started) return
+        // surfaceDestroyed fires BEFORE onStop here: pause first so the drain
+        // below tears down a quiescent GPU. onStop's pause() is then a no-op.
+        if (session.booted) session.pause()
         session.detachSurface()                           // synchronous GPU drain (SP0)
     }
 

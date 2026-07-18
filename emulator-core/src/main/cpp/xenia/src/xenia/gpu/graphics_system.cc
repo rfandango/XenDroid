@@ -401,22 +401,29 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
 void GraphicsSystem::MarkVblank() {
   SCOPE_profile_cpu_f("gpu");
 
-  // Capture vblank cadence so D1MODE_V_COUNTER tracks the actual rate
-  // (50Hz, 60Hz, or uncapped ~1ms), not just the configured one.
-  const uint64_t now = Clock::QueryGuestTickCount();
-  const uint64_t prev =
-      last_vblank_guest_tick_.exchange(now, std::memory_order_acq_rel);
-  if (prev && now > prev) {
-    vblank_period_ticks_.store(now - prev, std::memory_order_release);
+  // No guest vblank ISR while paused (a halted GPU raises no interrupts).
+  // Raise the in-dispatch flag before checking paused_ so Pause()'s fence
+  // can't miss an ISR already starting.
+  vblank_dispatch_active_.store(true, std::memory_order_seq_cst);
+  if (!paused_.load(std::memory_order_seq_cst)) {
+    // Capture vblank cadence so D1MODE_V_COUNTER tracks the actual rate
+    // (50Hz, 60Hz, or uncapped ~1ms), not just the configured one.
+    const uint64_t now = Clock::QueryGuestTickCount();
+    const uint64_t prev =
+        last_vblank_guest_tick_.exchange(now, std::memory_order_acq_rel);
+    if (prev && now > prev) {
+      vblank_period_ticks_.store(now - prev, std::memory_order_release);
+    }
+
+    // Increment vblank counter (so the game sees us making progress).
+    command_processor_->increment_counter();
+
+    // TODO(benvanik): we shouldn't need to do the dispatch here, but there's
+    //     something wrong and the CP will block waiting for code that
+    //     needs to be run in the interrupt.
+    DispatchInterruptCallback(0, 2);
   }
-
-  // Increment vblank counter (so the game sees us making progress).
-  command_processor_->increment_counter();
-
-  // TODO(benvanik): we shouldn't need to do the dispatch here, but there's
-  //     something wrong and the CP will block waiting for code that
-  //     needs to be run in the interrupt.
-  DispatchInterruptCallback(0, 2);
+  vblank_dispatch_active_.store(false, std::memory_order_release);
 }
 
 void GraphicsSystem::ClearCaches() {
@@ -476,15 +483,24 @@ void GraphicsSystem::BeginTracing() {
 void GraphicsSystem::EndTracing() { command_processor_->EndTracing(); }
 
 void GraphicsSystem::Pause() {
-  paused_ = true;
-
+  // CP first: a mid-packet WAIT_REG_MEM can only drain while the vblank ISR
+  // and guest threads are alive. Then gate vblank, fencing any ISR in flight.
   command_processor_->Pause();
+
+  paused_.store(true, std::memory_order_seq_cst);
+  while (vblank_dispatch_active_.load(std::memory_order_seq_cst)) {
+    xe::threading::MaybeYield();
+  }
 }
 
 void GraphicsSystem::Resume() {
-  paused_ = false;
-
+  // CP first: the first ISR after resume must see a live command processor.
   command_processor_->Resume();
+
+  // Re-seed the cadence so the pause gap isn't recorded as a vblank period.
+  last_vblank_guest_tick_.store(0, std::memory_order_release);
+
+  paused_.store(false, std::memory_order_seq_cst);
 }
 
 bool GraphicsSystem::Save(ByteStream* stream) {

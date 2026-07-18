@@ -1400,76 +1400,36 @@ X_STATUS Emulator::CompressDiscToZarchive(
 #endif  // XE_PLATFORM_xendroid
 
 void Emulator::Pause() {
-  if (paused_) {
+  if (!graphics_system_ || !audio_system_) {
+    // Lifecycle pause during the boot splash; nothing to park yet.
     return;
   }
-  paused_ = true;
-
-  // Don't hold the lock on this (so any waits follow through)
-  graphics_system_->Pause();
-  audio_system_->Pause();
-
-  auto lock = global_critical_region::AcquireDirect();
-  auto threads =
-      kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
-          kernel::XObject::Type::Thread);
-  auto current_thread = kernel::XThread::IsInThread()
-                            ? kernel::XThread::GetCurrentThread()
-                            : nullptr;
-  for (auto thread : threads) {
-    // Don't pause ourself or host threads.
-    if (thread == current_thread || !thread->can_debugger_suspend()) {
-      continue;
-    }
-
-    if (thread->is_running()) {
-#if XE_PLATFORM_xendroid
-      // Arbitrate against the self-suspend gate in XThread::Execute so a thread
-      // that just started running is suspended exactly once (and resumed once).
-      if (thread->emu_try_pause()) {
-        thread->thread()->Suspend(nullptr);
-      }
-#else
-      thread->thread()->Suspend(nullptr);
-#endif
-    }
+  if (paused_.exchange(true)) {
+    return;
   }
 
-  XELOGD("! EMULATOR PAUSED !");
+  // Soft pause: park the progress sources and let guest threads settle on
+  // their own waits. Suspending threads mid-operation loses in-flight
+  // cross-thread completions (permanent Skate 3 deadlock). Audio first so an
+  // in-flight guest audio callback drains while the CP and vblank are live.
+  audio_system_->Pause();
+  graphics_system_->Pause();
+
+  XELOGI("! EMULATOR PAUSED !");
 }
 
 void Emulator::Resume() {
-  if (!paused_) {
+  if (!graphics_system_ || !audio_system_) {
     return;
   }
-  paused_ = false;
-  XELOGD("! EMULATOR RESUMED !");
+  if (!paused_.exchange(false)) {
+    return;
+  }
+  XELOGI("! EMULATOR RESUMED !");
 
+  // Reverse of Pause().
   graphics_system_->Resume();
   audio_system_->Resume();
-
-  auto threads =
-      kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
-          kernel::XObject::Type::Thread);
-  for (auto thread : threads) {
-    if (!thread->can_debugger_suspend()) {
-      // Don't pause host threads.
-      continue;
-    }
-
-#if XE_PLATFORM_xendroid
-    // Resume exactly the threads Pause or the Execute gate suspended. (A
-    // suspended thread keeps is_running()==true, since running_ is only cleared
-    // at thread exit, so the !is_running() gate below can't identify them.)
-    if (thread->emu_clear_pause()) {
-      thread->thread()->Resume(nullptr);
-    }
-#else
-    if (!thread->is_running()) {
-      thread->thread()->Resume(nullptr);
-    }
-#endif
-  }
 }
 
 bool Emulator::SaveToFile(const std::filesystem::path& path) {

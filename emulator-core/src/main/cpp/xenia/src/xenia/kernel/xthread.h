@@ -406,15 +406,6 @@ class XThread : public XObject, public cpu::Thread {
   bool main_thread() const { return main_thread_; }
   bool is_running() const { return running_; }
 
-#if XE_PLATFORM_xendroid
-  // Background-pause coverage: arbitrate a single suspend/resume per thread
-  // between Emulator::Pause/Resume and the self-suspend gate in Execute().
-  // exchange() guarantees exactly one of them suspends (and resumes) us, so a
-  // thread that starts running during the pause window is parked exactly once.
-  bool emu_try_pause() { return !emu_paused_.exchange(true); }
-  bool emu_clear_pause() { return emu_paused_.exchange(false); }
-#endif
-
   // True for threads that run a host C++ routine (XHostThread) rather than
   // guest PPC code. These always use a real host thread, never a cooperative
   // fiber, since they run host loops/blocking and other code dereferences their
@@ -557,9 +548,6 @@ class XThread : public XObject, public cpu::Thread {
   bool guest_thread_ = false;
   bool main_thread_ = false;  // Entry-point thread
   bool running_ = false;
-#if XE_PLATFORM_xendroid
-  std::atomic<bool> emu_paused_{false};  // see emu_try_pause()/emu_clear_pause()
-#endif
 
   int32_t priority_ = 0;       // current effective priority (may be decayed)
   int32_t base_priority_ = 0;  // priority floor — decay never goes below this

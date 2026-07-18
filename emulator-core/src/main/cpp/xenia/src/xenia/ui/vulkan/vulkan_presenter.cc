@@ -1515,13 +1515,23 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(
   VkSemaphore acquire_semaphore = paint_submission.acquire_semaphore();
 
   uint32_t swapchain_image_index;
+  // Finite timeout: an infinite acquire holds paint_mode_mutex_ against the
+  // surface-teardown path. On timeout just drop the frame - no connection
+  // state change, so a merely-slow compositor can't trigger a rebuild loop.
+  constexpr uint64_t kAcquireTimeoutNs = 1000000000ull;  // 1 second
   VkResult acquire_result = dfn.vkAcquireNextImageKHR(
-      device, paint_context_.swapchain, UINT64_MAX, acquire_semaphore,
+      device, paint_context_.swapchain, kAcquireTimeoutNs, acquire_semaphore,
       VK_NULL_HANDLE, &swapchain_image_index);
   switch (acquire_result) {
     case VK_SUCCESS:
     case VK_SUBOPTIMAL_KHR:
       break;
+    case VK_TIMEOUT:
+    case VK_NOT_READY:
+      XELOGI(
+          "VulkanPresenter: Swapchain image acquire timed out; dropping the "
+          "frame");
+      return PaintResult::kNotPresented;
     case VK_ERROR_DEVICE_LOST:
       XELOGE(
           "VulkanPresenter: Failed to acquire the swapchain image as the "

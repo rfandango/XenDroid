@@ -157,7 +157,10 @@ class GraphicsSystem {
   RegisterFile* register_file_;
   std::unique_ptr<CommandProcessor> command_processor_;
 
-  bool paused_ = false;
+  std::atomic<bool> paused_{false};
+  // Set while MarkVblank dispatches the guest ISR; Pause() fences on it
+  // (Dekker pairing with paused_, both seq_cst).
+  std::atomic<bool> vblank_dispatch_active_{false};
 
   uint32_t scaled_aspect_x_ = 0;
   uint32_t scaled_aspect_y_ = 0;
