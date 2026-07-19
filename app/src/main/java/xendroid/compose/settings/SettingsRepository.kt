@@ -19,9 +19,17 @@ fun modified(effectiveLive: String?, effectiveTemplate: String?, schemaDefault: 
 
 class SettingsRepository(private val store: ConfigStore) {
 
+    companion object {
+        /** Immutable per process; parse the bundled template once. */
+        @Volatile private var cachedTemplateDefaults: Map<String, String?>? = null
+    }
+
     private var live: ConfigHandle? = null
-    /** key -> template default (raw String), captured once at load. */
     private var templateDefaults: Map<String, String?> = emptyMap()
+    /** True once an edit was made; a clean flush frees the handle without writing. */
+    private var dirty = false
+    /** Set by close(): after teardown, ensureOpen() must not resurrect the handle. */
+    private var terminated = false
 
     val isCustomDriverSupported: Boolean
         get() = runCatching { File("/dev/kgsl-3d0").exists() }.getOrDefault(false)
@@ -31,14 +39,16 @@ class SettingsRepository(private val store: ConfigStore) {
      *  race on `live` (double-open leak / open-during-close). */
     @Synchronized
     fun open() {
-        if (live != null) return
+        if (live != null || terminated) return
         live = store.openLive()
-        // Read defaults from the bundled template baseline, then close it (string handle).
-        val baseline = store.openTemplateBaseline()
-        templateDefaults = SettingsSchema.allSettings.associate { s ->
-            s.key to baseline.getString(s.section, s.name)
+        templateDefaults = cachedTemplateDefaults ?: run {
+            val baseline = store.openTemplateBaseline()
+            val defaults = SettingsSchema.allSettings.associate { s ->
+                s.key to baseline.getString(s.section, s.name)
+            }
+            baseline.closeDiscard()
+            defaults.also { cachedTemplateDefaults = it }
         }
-        baseline.closeString()  // free the string handle (we don't persist it)
     }
 
     /** Re-open after a pause-flush nulled the handle. No-op if already open. */
@@ -50,10 +60,12 @@ class SettingsRepository(private val store: ConfigStore) {
     // Reads are null-safe against an un-open()ed handle: the screen composes rows
     // before the async open() (which waits on ensureLoaded off-main) completes, so a
     // not-yet-open repo returns schema defaults rather than crashing on handle().
+    @Synchronized
     fun rawValue(s: Setting): String? = live?.getString(s.section, s.name)
 
+    @Synchronized
     fun valueOf(s: Setting): SettingValue {
-        val raw = rawValue(s)
+        val raw = live?.getString(s.section, s.name)
         return SettingValue(raw, modified = isModified(s, raw))
     }
 
@@ -70,26 +82,47 @@ class SettingsRepository(private val store: ConfigStore) {
     }
 
     // ---- Typed reads with schema-default fallback (null-safe vs un-open()ed handle) ----
+    @Synchronized
     fun boolOf(s: Setting.Bool): Boolean = live?.getBool(s.section, s.name, s.default) ?: s.default
+    @Synchronized
     fun intOf(s: Setting.IntRange): Int = live?.getInt(s.section, s.name, s.default) ?: s.default
+    @Synchronized
     fun listValueOf(s: Setting.ListChoice): String =
         live?.getString(s.section, s.name) ?: s.default
+    @Synchronized
     fun stringOf(s: Setting): String = live?.getString(s.section, s.name) ?: ""
 
     // ---- Writes (in-memory; persisted on close) ----
-    fun setBool(s: Setting.Bool, v: Boolean) = handle().putBool(s.section, s.name, v)
-    fun setInt(s: Setting.IntRange, v: Int) =
-        handle().putInt(s.section, s.name, v.coerceIn(s.min, s.max))
-    fun setListValue(s: Setting.ListChoice, value: String) =
-        handle().putString(s.section, s.name, value)
-    fun setRawString(s: Setting, value: String) =
-        handle().putString(s.section, s.name, value)
+    @Synchronized
+    fun setBool(s: Setting.Bool, v: Boolean) { handle().putBool(s.section, s.name, v); dirty = true }
+    @Synchronized
+    fun setInt(s: Setting.IntRange, v: Int) {
+        handle().putInt(s.section, s.name, v.coerceIn(s.min, s.max)); dirty = true
+    }
+    @Synchronized
+    fun setListValue(s: Setting.ListChoice, value: String) {
+        handle().putString(s.section, s.name, value); dirty = true
+    }
+    @Synchronized
+    fun setRawString(s: Setting, value: String) {
+        handle().putString(s.section, s.name, value); dirty = true
+    }
 
-    /** Persist edits to disk + free the handle. Safe to call multiple times. */
+    /** Free the handle; write to disk only when dirty. Synchronous: the ON_PAUSE
+     *  write must be durable before a background kill. */
     @Synchronized
     fun flushAndClose() {
-        live?.closeFile()   // idempotent; the ONLY disk write
+        val h = live ?: return
+        if (dirty) h.closeFile() else h.closeDiscard()
         live = null
+        dirty = false
+    }
+
+    /** Terminal teardown for onCleared: flush then block resurrection. */
+    @Synchronized
+    fun close() {
+        flushAndClose()
+        terminated = true
     }
 
     /** Durably persist the custom Vulkan driver path INDEPENDENTLY of the screen handle.

@@ -72,6 +72,13 @@ class ConfigHandle private constructor(
         return config.close_config()
     }
 
+    /** Free without serializing or writing - for read-only use of any handle. */
+    fun closeDiscard() {
+        if (closed) return
+        closed = true
+        config.free_config()
+    }
+
     companion object {
         /** @throws Emulator.ConfigFileException on parse error / missing file. */
         @Throws(Emulator.ConfigFileException::class)

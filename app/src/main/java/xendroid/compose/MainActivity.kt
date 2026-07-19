@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import xendroid.compose.core.EmulatorRuntime
 import xendroid.compose.core.SessionLogs
 import xendroid.compose.ui.AppNavHost
 import xendroid.compose.ui.theme.xendroidTheme
@@ -22,6 +23,8 @@ class MainActivity : ComponentActivity() {
             val appContext = applicationContext
             thread(name = "SessionLogs") {
                 runCatching { SessionLogs.startAppSession(appContext) }
+                // Pre-warm so settings doesn't pay the delay-load System.loadLibrary.
+                runCatching { EmulatorRuntime.ensureLoaded() }
             }
         }
         // Application.onCreate already ran the GPU probe + (on Adreno 830) eager

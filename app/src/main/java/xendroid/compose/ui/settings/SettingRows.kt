@@ -26,13 +26,13 @@ import xendroid.compose.settings.Setting
 import xendroid.compose.settings.SettingsHost
 
 @Composable
-fun SettingRow(host: SettingsHost, s: Setting, modified: Boolean) = when (s) {
+fun SettingRow(host: SettingsHost, s: Setting, modified: Boolean, raw: String? = null) = when (s) {
     is Setting.Bool       -> BoolRow(host, s, modified)
     is Setting.IntRange   -> IntRow(host, s, modified)
     is Setting.ListChoice -> ListRow(host, s, modified)
     is Setting.Action     ->
         if (s.name == "dump_session_logs") ExportLogsRow(s)
-        else DriverActionRow(host, s, modified)
+        else DriverActionRow(host, s, modified, raw)
 }
 
 @Composable
@@ -159,10 +159,10 @@ private fun ExportLogsRow(s: Setting.Action) {
 }
 
 @Composable
-private fun DriverActionRow(host: SettingsHost, s: Setting.Action, modified: Boolean) {
+private fun DriverActionRow(host: SettingsHost, s: Setting.Action, modified: Boolean, raw: String?) {
     if (!host.isCustomDriverSupported) return  // gated: not an Adreno/kgsl device
     val context = LocalContext.current
-    val current = host.currentDriverPath(s)   // read live (see IntRow)
+    val current = raw ?: host.currentDriverPath(s)   // snapshot-backed; recomposes on change
     // .zip picker -> install via Utils on the host Activity (see note below).
     val pickZip = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()

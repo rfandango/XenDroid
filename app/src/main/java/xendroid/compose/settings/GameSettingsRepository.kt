@@ -52,7 +52,7 @@ class GameSettingsRepository(private val store: ConfigStore, private val titleId
                     h.getString(s.section, s.name)?.let { overrides[s.key] = it }
                 }
             } finally {
-                h.closeFile()  // no edits made -> harmless re-serialize of the same content
+                h.closeDiscard()  // read-only pass; skip the pointless re-serialize + write
             }
         }.onFailure { Log.w("GameSettingsRepo", "per-game open failed ($titleId)", it) }
         // 2) snapshot the global effective values (the INHERITED display). Must not throw -- if it
@@ -63,7 +63,7 @@ class GameSettingsRepository(private val store: ConfigStore, private val titleId
             globalValues = SettingsSchema.allSettings.associate { s ->
                 s.key to snap.getString(s.section, s.name)
             }
-            snap.closeString()
+            snap.closeDiscard()
         }.onFailure { Log.w("GameSettingsRepo", "global snapshot failed", it) }
         opened = true
     }

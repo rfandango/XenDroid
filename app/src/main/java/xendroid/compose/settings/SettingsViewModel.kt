@@ -23,8 +23,8 @@ class SettingsViewModel(private val repo: SettingsRepository) : ViewModel(), Set
     /** Single off-main load path (shared by init + onResume): ensureLoaded() can sleep +
      *  System.loadLibrary on delay-load devices (Adreno 5xx/6xx) where Application.onCreate
      *  skips the eager load, so the native Config calls must wait on it OFF the main thread.
-     *  repo.ensureOpen() is @Synchronized + idempotent, so concurrent init/onResume loads
-     *  cannot double-open. */
+     *  The repo is @Synchronized throughout, so concurrent load/flush/driver ops cannot
+     *  corrupt the native handle. */
     private fun load() {
         viewModelScope.launch(Dispatchers.IO) {
             EmulatorRuntime.ensureLoaded()
@@ -57,16 +57,19 @@ class SettingsViewModel(private val repo: SettingsRepository) : ViewModel(), Set
         }
     }
 
-    override fun currentBool(s: Setting.Bool) = repo.boolOf(s)
-    override fun currentInt(s: Setting.IntRange) = repo.intOf(s)
-    override fun currentListValue(s: Setting.ListChoice) = repo.listValueOf(s)
-    override fun currentDriverPath(s: Setting.Action) = repo.stringOf(s)
+    // Snapshot-backed reads: rows recompose often; avoid a JNI crossing per read.
+    private fun raw(s: Setting): String? = _values.value[s.key]?.raw
 
-    /** Durable write. Call from the screen on lifecycle pause and on dispose. */
+    override fun currentBool(s: Setting.Bool) = ConfigValueShape.parseBool(raw(s), s.default)
+    override fun currentInt(s: Setting.IntRange) = ConfigValueShape.parseInt(raw(s), s.default)
+    override fun currentListValue(s: Setting.ListChoice) = raw(s) ?: s.default
+    override fun currentDriverPath(s: Setting.Action) = raw(s) ?: ""
+
+    /** Synchronous durable write; I/O-free when nothing was edited. */
     fun flush() = repo.flushAndClose()
 
     /** Re-open the handle after a pause-flush and refresh snapshots. Call on resume. */
     fun onResume() = load()
 
-    override fun onCleared() { repo.flushAndClose() }
+    override fun onCleared() { repo.close() }
 }

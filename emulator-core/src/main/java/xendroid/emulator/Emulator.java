@@ -28,6 +28,7 @@ public class Emulator {
 
         private native void native_save_config_entry_ty_arr(long n_handle,String tag,String[] val);
         private native void native_close_config_file(long n_handle,String config_path);
+        private native void native_free_config(long n_handle);
         public static Emulator.Config open_config_file(String config_path) throws Emulator.ConfigFileException
         {
             Emulator.Config config=new Emulator.Config();
@@ -76,6 +77,12 @@ public class Emulator {
             if(config_path!=null)
                 throw new RuntimeException("should use method close_config_file");
             return native_close_config(n_handle);
+        }
+
+        /** Free the native table without serializing or writing anything. */
+        public void free_config()
+        {
+            native_free_config(n_handle);
         }
     }
 

@@ -128,7 +128,7 @@ private fun SettingsCategoryDetail(
         LazyColumn(Modifier.fillMaxSize().padding(padding)) {
             items(category.settings, key = { it.key }) { setting ->
                 val sv = values[setting.key]
-                SettingRow(vm, setting, modified = sv?.modified == true)
+                SettingRow(vm, setting, modified = sv?.modified == true, raw = sv?.raw)
                 HorizontalDivider()
             }
         }

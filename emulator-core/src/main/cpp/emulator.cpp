@@ -287,24 +287,20 @@ static jstring j_load_config_entry(JNIEnv* env, jobject self, toml::table* confi
     if (value_node->is_boolean()) {
         bool val = *value_node->value<bool>();
         std::string val_str = val ? "true" : "false";
-        LOGE("load_config_entry Z %s %s", tag_str.c_str(), val_str.c_str());
         return env->NewStringUTF(val_str.c_str());
     }
     else if (value_node->is_integer()) {
         int64_t val = *value_node->value<int64_t>();
         std::string val_str = std::to_string(val);
-        LOGE("load_config_entry I %s %s", tag_str.c_str(), val_str.c_str());
         return env->NewStringUTF(val_str.c_str());
     }
     else if (value_node->is_floating_point()) {
         double val = *value_node->value<double>();
         std::string val_str = std::to_string(val);
-        LOGE("load_config_entry F %s %s", tag_str.c_str(), val_str.c_str());
         return env->NewStringUTF(val_str.c_str());
     }
     else if (value_node->is_string()) {
         std::string val = *value_node->value<std::string>();
-        LOGE("load_config_entry S %s %s", tag_str.c_str(), val.c_str());
         return env->NewStringUTF(val.c_str());
     }
 
@@ -364,15 +360,12 @@ static void j_save_config_entry(JNIEnv* env, jobject self, toml::table* config_t
     };
 
     if (val_str == "true" || val_str == "false") {
-        LOGE("save_config_entry Z %s %s", tag_str.c_str(), val_str.c_str());
         table->insert_or_assign(key_name, val_str == "true");
     }
     else if (is_float_number(val_str)) {
-        LOGE("save_config_entry F %s %s", tag_str.c_str(), val_str.c_str());
         table->insert_or_assign(key_name, std::stod(val_str));
     }
     else if (is_int_number(val_str)) {
-        LOGE("save_config_entry I %s %s", tag_str.c_str(), val_str.c_str());
         try {
             table->insert_or_assign(key_name, std::stoi(val_str));
         } catch (...) {
@@ -380,7 +373,6 @@ static void j_save_config_entry(JNIEnv* env, jobject self, toml::table* config_t
         }
     }
     else {
-        LOGE("save_config_entry S %s %s", tag_str.c_str(), val_str.c_str());
         table->insert_or_assign(key_name, val_str);
     }
 }
@@ -405,6 +397,10 @@ static void j_close_config_file(JNIEnv* env, jobject self, toml::table* config_t
     delete config_table;
 }
 
+static void j_free_config(JNIEnv* env, jobject self, toml::table* config_table) {
+    delete config_table;
+}
+
 #else
 #error "CFG_TYPE_XXX not defined"
 #endif
@@ -421,6 +417,7 @@ int register_Emulator$Config(JNIEnv* env){
             { "native_save_config_entry", "(JLjava/lang/String;Ljava/lang/String;)V", (void *) j_save_config_entry },
             { "native_save_config_entry_ty_arr", "(JLjava/lang/String;[Ljava/lang/String;)V", (void *) j_save_config_entry_ty_arr },
             { "native_close_config_file", "(JLjava/lang/String;)V", (void *) j_close_config_file },
+            { "native_free_config", "(J)V", (void *) j_free_config },
     };
     jclass clazz = env->FindClass("xendroid/emulator/Emulator$Config");
     return env->RegisterNatives(clazz,methods, sizeof(methods)/sizeof(methods[0]));
