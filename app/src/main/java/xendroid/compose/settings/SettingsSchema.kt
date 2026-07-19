@@ -218,6 +218,8 @@ object SettingsSchema {
             l("Logging", "log_level", "Log level", "2",
                 "0" to "error", "1" to "warning", "2" to "info", "3" to "debug"),
             b("Logging", "flush_log", "Flush log", true),
+            i("Logging", "log_sessions_keep", "Shelved log sessions to keep", 4, 1, 16),
+            Action("Logging", "dump_session_logs", "Export session logs to Downloads", ""),
         )),
 
         SettingsCategory("Content", listOf(

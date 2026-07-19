@@ -53,6 +53,12 @@ DEFINE_transient_bool(log_append, false,
                       "Logging");
 DEFINE_bool(log_to_stdout, true, "Write log output to stdout", "Logging");
 DEFINE_bool(log_to_debugprint, false, "Dump the log to DebugPrint.", "Logging");
+// Consumed by the Android app layer (session log shelving), defined here so it
+// round-trips through the config like any other Logging setting.
+DEFINE_uint32(log_sessions_keep, 4,
+              "Number of past sessions whose logs (xenia log + logcat) are "
+              "kept as zips in <storage>/logs, rotated at session start.",
+              "Logging");
 #endif  // XE_PLATFORM_ANDROID
 DEFINE_bool(flush_log, true, "Flush log file after each log line batch.",
             "Logging");

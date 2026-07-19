@@ -1,6 +1,7 @@
 package xendroid.compose.ui.settings
 
 import android.app.Activity
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -16,7 +17,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import xendroid.compose.Utils
+import xendroid.compose.core.SessionLogs
 import xendroid.compose.settings.Setting
 import xendroid.compose.settings.SettingsHost
 
@@ -25,7 +30,9 @@ fun SettingRow(host: SettingsHost, s: Setting, modified: Boolean) = when (s) {
     is Setting.Bool       -> BoolRow(host, s, modified)
     is Setting.IntRange   -> IntRow(host, s, modified)
     is Setting.ListChoice -> ListRow(host, s, modified)
-    is Setting.Action     -> DriverActionRow(host, s, modified)
+    is Setting.Action     ->
+        if (s.name == "dump_session_logs") ExportLogsRow(s)
+        else DriverActionRow(host, s, modified)
 }
 
 @Composable
@@ -120,6 +127,34 @@ private fun ListRow(host: SettingsHost, s: Setting.ListChoice, modified: Boolean
             confirmButton = {},
             dismissButton = { TextButton(onClick = { showDialog = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun ExportLogsRow(s: Setting.Action) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = !busy) {
+            busy = true
+            scope.launch {
+                val dest = withContext(Dispatchers.IO) {
+                    runCatching { SessionLogs.exportAll() }.getOrNull()
+                }
+                Toast.makeText(context,
+                    dest?.let { "Logs exported to ${it.name} in Downloads" }
+                        ?: "No logs to export",
+                    Toast.LENGTH_LONG).show()
+                busy = false
+            }
+        }.padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.weight(1f)) {
+            RowTitle(s.title, false,
+                sub = if (busy) "Exporting..." else "Shelved sessions + current run")
+        }
     }
 }
 

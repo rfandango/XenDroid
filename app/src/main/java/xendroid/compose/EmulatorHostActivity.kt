@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import xendroid.compose.core.EmuProcessLink
 import xendroid.compose.core.EmulatorRuntime
 import xendroid.compose.core.EmulatorSession
+import xendroid.compose.core.SessionLogs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
@@ -154,6 +155,12 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
                     Toast.LENGTH_LONG).show()
                 finish(); return@launch
             }
+            // Shortcut launches skip the main process; make sure the session
+            // logcat capture exists. Shelving stays a main-process concern.
+            withContext(Dispatchers.IO) {
+                runCatching { SessionLogs.ensureCaptureRunning() }
+                    .onFailure { Log.w(TAG, "Session log capture failed", it) }
+            }
             prepareNativeRealPath(gameUri)                // back on main (lifecycleScope = Main)
             installSurfaceView()
         }
@@ -206,6 +213,9 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
             "--storage_root=" + Utils.get_storage_root_path(),
             "--config=" + Application.get_global_config_file().absolutePath,
             "--log_file=" + Utils.get_log_file_path(),
+            // One app session = one xe.log: emulator runs append, the shelver
+            // rotates at the next app-session start.
+            "--log_append=true",
         ))
         session.setupUriInfoListFile(Application.get_uri_info_list_file().absolutePath)
     }
