@@ -63,9 +63,7 @@ object SettingsSchema {
         )),
 
         SettingsCategory("UI", listOf(
-            b("UI", "show_profiler", "Show profiler", false),
             b("UI", "show_achievement_notification", "Show achievement notification", true),
-            b("UI", "profiler_dpi_scaling", "Profiler DPI scaling", false),
             b("UI", "storage_selection_dialog", "Storage selection dialog", false),
             b("UI", "headless", "Headless", true),
         )),
@@ -87,8 +85,6 @@ object SettingsSchema {
             b("Kernel", "allow_incompatible_title_update", "Allow incompatible title update", true),
             b("Kernel", "apply_title_update", "Apply title update", true),
             b("Kernel", "kernel_debug_monitor", "Kernel debug monitor", false),
-            // NOTE capital 'A' in the key — verified in XML/TOML.
-            b("Kernel", "Allow_nui_initialization", "Allow NUI initialization", false),
         )),
 
         SettingsCategory("HID", listOf(
@@ -124,7 +120,6 @@ object SettingsSchema {
             // host_present_from_non_ui_thread intentionally NOT exposed: it MUST be true on
             // Android (forced in xendroid_emu.cpp after config load) -- false black-screens the
             // app, so there is no valid user choice to make.
-            b("Display", "fullscreen", "Fullscreen", false),
             b("Display", "show_debug_overlay", "Show debug overlay", false),
         )),
 
@@ -168,20 +163,15 @@ object SettingsSchema {
             b("GPU", "log_guest_driven_gpu_register_written_values", "Log guest-driven GPU register writes", false),
             b("GPU", "trace_gpu_stream", "Trace GPU stream", false),
             b("GPU", "force_convert_quad_lists_to_triangle_lists", "Convert quad lists to triangle lists", false),
-            b("GPU", "ignore_32bit_vertex_index_support", "Ignore 32-bit vertex index support", false),
             b("GPU", "execute_unclipped_draw_vs_on_cpu_with_scissor", "Unclipped draw VS on CPU (scissor)", false),
             b("GPU", "mrt_edram_used_range_clamp_to_min", "MRT EDRAM used-range clamp to min", true),
-            b("GPU", "gamma_render_target_as_srgb", "Gamma render target as sRGB", false),
             b("GPU", "execute_unclipped_draw_vs_on_cpu", "Unclipped draw VS on CPU", true),
             b("GPU", "readback_memexport", "Readback memexport", false),
             b("GPU", "force_convert_triangle_fans_to_lists", "Convert triangle fans to lists", false),
-            b("GPU", "disassemble_pm4", "Disassemble PM4", false),
             b("GPU", "non_seamless_cube_map", "Non-seamless cube map", true),
             b("GPU", "depth_float24_round", "Depth float24 round", false),
             b("GPU", "clear_memory_page_state", "Clear memory page state", false),
             b("GPU", "depth_transfer_not_equal_test", "Depth transfer not-equal test", true),
-            b("GPU", "native_stencil_value_output", "Native stencil value output", true),
-            b("GPU", "force_convert_line_loops_to_strips", "Convert line loops to strips", false),
             b("GPU", "execute_unclipped_draw_vs_on_cpu_for_psi_render_backend", "Unclipped draw VS on CPU (PSI backend)", true),
             b("GPU", "draw_resolution_scaled_texture_offsets", "Draw resolution-scaled texture offsets", true),
             l("GPU", "gpu", "GPU backend", "vulkan",
@@ -193,27 +183,17 @@ object SettingsSchema {
         SettingsCategory("CPU", listOf(
             b("CPU", "validate_hir", "Validate HIR", false),
             b("CPU", "trace_function_references", "Trace function references", false),
-            b("CPU", "trace_functions", "Trace functions", false),
             b("CPU", "trace_function_coverage", "Trace function coverage", false),
             b("CPU", "store_all_context_values", "Store all context values", false),
-            b("CPU", "ignore_undefined_externs", "Ignore undefined externs", true),
-            b("CPU", "debugprint_trap_log", "Debugprint trap log", false),
             b("CPU", "break_condition_truncate", "Break condition truncate", true),
-            l("CPU", "cpu", "CPU backend", "any",
-                "any" to "any", "a64" to "a64"),  // arrays.xml lists only [any,a64]
             b("CPU", "clock_source_raw", "Clock source raw", false),
-            b("CPU", "disassemble_functions", "Disassemble functions", false),
             b("CPU", "break_on_unimplemented_instructions", "Break on unimplemented instructions", true),
             b("CPU", "break_on_start", "Break on start", false),
             b("CPU", "inline_mmio_access", "Inline MMIO access", true),
-            b("CPU", "disable_global_lock", "Disable global lock", false),
-            b("CPU", "break_on_debugbreak", "Break on debugbreak", true),
             b("CPU", "clock_no_scaling", "Clock no scaling", false),
         )),
 
         SettingsCategory("Logging", listOf(
-            b("Logging", "log_to_stdout", "Log to stdout", true),
-            b("Logging", "log_to_debugprint", "Log to debugprint", false),
             b("Logging", "log_string_format_kernel_calls", "Log string-format kernel calls", false),
             l("Logging", "log_level", "Log level", "2",
                 "0" to "error", "1" to "warning", "2" to "info", "3" to "debug"),
@@ -230,8 +210,6 @@ object SettingsSchema {
         SettingsCategory("General", listOf(
             i("General", "time_scalar", "Time scalar", 1, 1, 8),
             b("General", "allow_plugins", "Allow plugins", false),
-            b("General", "debug", "Debug", false),
-            b("General", "discord", "Discord", false),
             b("General", "apply_patches", "Apply patches", true),
         )),
 
