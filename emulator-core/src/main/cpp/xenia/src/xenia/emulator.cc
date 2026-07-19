@@ -112,6 +112,15 @@ DEFINE_bool(allow_game_relative_writes, false,
             "generating test data to compare with original hardware. ",
             "General");
 
+DEFINE_bool(guest_crash_is_fatal, true,
+            "When a guest thread crashes (unhandled access violation or "
+            "illegal instruction in JIT'd guest code), log a full crash report "
+            "and terminate the emulator instead of silently parking the "
+            "faulted thread - which starves the rest of the guest and shows up "
+            "as a hang. Disable to keep the thread parked for post-mortem "
+            "inspection.",
+            "General");
+
 DECLARE_string(gpu);
 DECLARE_string(apu);
 
@@ -2043,19 +2052,59 @@ bool Emulator::ExceptionCallback(Exception* ex) {
 
   auto context = current_thread->thread_state()->context();
 
+  const uint32_t guest_pc =
+      guest_function->MapMachineCodeToGuestAddress(ex->pc());
+  const uint32_t guest_lr = uint32_t(context->lr);
+  const uint32_t guest_ctr = uint32_t(context->ctr);
+  const uint32_t guest_sp = uint32_t(context->r[1]);
+
+  // GetExecutableModule() returns a cached ref (no lock), safe from here.
+  uint32_t module_base = 0, module_size = 0, title_id = 0;
+  std::string module_name = "?";
+  if (auto exec_module = kernel_state()->GetExecutableModule()) {
+    module_name = exec_module->name();
+    title_id = exec_module->title_id();
+    if (auto* xex = exec_module->xex_module()) {
+      module_base = xex->base_address();
+      module_size = xex->image_size();
+    }
+  }
+  auto mod_off = [&](uint32_t addr) -> std::string {
+    if (module_base && addr >= module_base &&
+        addr < module_base + module_size) {
+      return fmt::format("{}+0x{:X}", module_name, addr - module_base);
+    }
+    return "?";
+  };
+  // Guarded read so the handler can't fault re-entrantly.
+  auto guest_read32 = [&](uint32_t addr, uint32_t* out) -> bool {
+    auto* heap = memory()->LookupHeap(addr);
+    uint32_t protect = 0;
+    if (!heap || !heap->QueryProtect(addr, &protect) ||
+        !(protect & kMemoryProtectRead)) {
+      return false;
+    }
+    *out = xe::load_and_swap<uint32_t>(memory()->TranslateVirtual(addr));
+    return true;
+  };
+
   std::string crash_msg;
   crash_msg.append("==== CRASH DUMP ====\n");
+  crash_msg.append(
+      fmt::format("Title: {} ({:08X})\n", module_name, title_id));
   // Fiber-backed guest threads have no host thread, so report 0 for the host id
   // and avoid null-dereferencing thread() inside the crash handler.
   crash_msg.append(fmt::format(
-      "Thread ID (Host: 0x{:08X} / Guest: 0x{:08X})\n",
+      "Thread: '{}' (Host: 0x{:08X} / Guest: 0x{:08X}, Handle: 0x{:08X})\n",
+      current_thread->name(),
       current_thread->thread() ? current_thread->thread()->system_id() : 0,
-      current_thread->thread_id()));
+      current_thread->thread_id(), current_thread->handle()));
+  crash_msg.append(fmt::format("PC:  0x{:08X}  {}\n", guest_pc,
+                               mod_off(guest_pc)));
+  crash_msg.append(fmt::format("LR:  0x{:08X}  {}\n", guest_lr,
+                               mod_off(guest_lr)));
   crash_msg.append(
-      fmt::format("Thread Handle: 0x{:08X}\n", current_thread->handle()));
-  crash_msg.append(
-      fmt::format("PC: 0x{:08X}\n",
-                  guest_function->MapMachineCodeToGuestAddress(ex->pc())));
+      fmt::format("CTR: 0x{:08X}  SP: 0x{:08X}\n", guest_ctr, guest_sp));
   if (ex->code() == Exception::Code::kAccessViolation) {
     const char* op_str = "unknown";
     if (ex->access_violation_operation() ==
@@ -2070,6 +2119,41 @@ bool Emulator::ExceptionCallback(Exception* ex) {
   } else if (ex->code() == Exception::Code::kIllegalInstruction) {
     crash_msg.append("Illegal Instruction\n");
   }
+  uint32_t instr_word = 0;
+  if (guest_read32(guest_pc, &instr_word)) {
+    crash_msg.append(
+        fmt::format("Faulting instruction: 0x{:08X}\n", instr_word));
+  }
+
+  // Varied guest prologues make a fixed back-chain walk unreliable; scan the
+  // stack for words pointing just past a `bl` in the module's code range.
+  crash_msg.append("Guest backtrace:\n");
+  crash_msg.append(
+      fmt::format("  #0  0x{:08X}  {}\n", guest_pc, mod_off(guest_pc)));
+  int frame = 1;
+  const uint32_t code_lo = module_base ? module_base : 0x82000000u;
+  const uint32_t code_hi =
+      module_base ? module_base + module_size : 0x90000000u;
+  if (guest_lr >= code_lo && guest_lr < code_hi) {
+    crash_msg.append(
+        fmt::format("  #{}  0x{:08X}  {}  (LR)\n", frame++, guest_lr,
+                    mod_off(guest_lr)));
+  }
+  for (uint32_t off = 0; off <= 0x800 && frame < 40; off += 4) {
+    uint32_t w = 0;
+    if (!guest_read32(guest_sp + off, &w)) {
+      break;  // ran off the mapped stack
+    }
+    if (w < code_lo || w >= code_hi || w == guest_lr) {
+      continue;
+    }
+    uint32_t prev = 0;
+    if (guest_read32(w - 4, &prev) && (prev >> 26) == 18 && (prev & 1)) {
+      crash_msg.append(fmt::format("  #{}  0x{:08X}  {}\n", frame++, w,
+                                   mod_off(w)));
+    }
+  }
+
   crash_msg.append("Registers:\n");
   for (int i = 0; i < 32; i++) {
     crash_msg.append(fmt::format(" r{:<3} = {:016X}\n", i, context->r[i]));
@@ -2099,6 +2183,16 @@ bool Emulator::ExceptionCallback(Exception* ex) {
                                                               &crash_dlg]() {
       xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_, "Uh-oh!", crash_dlg);
     });
+  }
+
+  // Parking only the faulted thread starves its dependents and reads as a
+  // hang. Terminate instead (FatalError aborts on Android); parking is kept
+  // for debugging, where the thread is inspectable.
+  if (cvars::guest_crash_is_fatal && !cvars::debug) {
+    xe::FatalError(fmt::format(
+        "Guest crashed at PC 0x{:08X} ({}). See the log for the full crash "
+        "report.",
+        guest_pc, mod_off(guest_pc)));
   }
 
   // Halt the crashed thread without unwinding the rest of the emulator. Host
