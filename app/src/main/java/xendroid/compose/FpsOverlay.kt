@@ -32,8 +32,9 @@ import kotlin.math.roundToInt
 import xendroid.compose.core.EmulatorSession
 
 /**
- * Small, draggable FPS / frame-time readout drawn over the Vulkan SurfaceView. Shows INSTANT fps
- * (1000/last-frame-ms), not the average. Polls the native lock-free frame-stats atomics at [pollHz].
+ * Small, draggable FPS / frame-time readout drawn over the Vulkan SurfaceView. Shows a RenderDoc-
+ * style ~1s average fps alongside the INSTANT frame time. Polls the native lock-free frame-stats
+ * atomics at [pollHz].
  *
  * The user can drag it anywhere; its position is persisted in a :emu-process SharedPreferences (so
  * the same DataStore the main process uses is never touched cross-process). Visibility is owned by
@@ -59,7 +60,7 @@ fun FpsOverlay(
     LaunchedEffect(pollHz) {
         val periodMs = 1000L / pollHz.coerceIn(1, 30)
         while (true) {
-            fps = session.instantFps()
+            fps = session.averageFps()
             frameMs = session.lastFrameTimeMs()
             delay(periodMs)
         }

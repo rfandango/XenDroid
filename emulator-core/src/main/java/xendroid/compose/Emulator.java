@@ -37,6 +37,8 @@ public class Emulator extends xendroid.emulator.Emulator{
     // Instant fps = 1000/last_frame_time_ms (0 when no frame timed yet). Distinct
     // from the smoothed average fps embedded in debug_overlay_text().
     public native double instant_fps();
+    // RenderDoc-style average fps over a ~1s sliding window (0 before first present).
+    public native double average_fps();
     // Effective Display|show_debug_overlay (the live cvar, with any per-game config
     // overlay applied by LoadGameConfig at boot). Poll post-boot: the per-game override
     // lands on the detached boot thread, so this only reflects it after the game loads.

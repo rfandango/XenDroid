@@ -37,47 +37,63 @@ inline std::atomic<float>& frame_fps() {
 }
 }  // namespace internal
 
-// Call once per presented guest frame (single producer thread). Cheap; safe to
-// call unconditionally.
+// Call once per presented guest frame (single producer thread).
+// FPS is a RenderDoc-style average over a ~1s sliding time window (framerate
+// independent); instant_ms stays the raw present-to-present delta.
 inline void RecordGuestPresent() {
   using clock = std::chrono::steady_clock;
-  static constexpr size_t kWindow = 120;
-  static double history_ms[kWindow] = {};
-  static size_t count = 0;
-  static size_t next = 0;
+  static constexpr double kWindowMs = 1000.0;
+  static constexpr size_t kCap = 1024;  // covers >1000 fps within the window
+  static clock::time_point ts[kCap];
+  static size_t head = 0;   // oldest sample
+  static size_t count = 0;  // samples in the window
   static clock::time_point last{};
 
   clock::time_point now = clock::now();
-  if (last == clock::time_point{}) {
-    // First present: just seed the timestamp, no delta yet.
-    last = now;
-    return;
-  }
+  const bool have_last = last != clock::time_point{};
   double instant_ms =
-      std::chrono::duration<double, std::milli>(now - last).count();
+      have_last ? std::chrono::duration<double, std::milli>(now - last).count()
+                : 0.0;
   last = now;
-  // Discard absurd deltas (first frame after a pause / load) so a single
-  // outlier doesn't skew the rolling average for ~2 seconds.
-  if (instant_ms > 1000.0) {
+
+  // A long gap (first frame / pause / load) restarts the window so the average
+  // recovers within a second instead of being dragged by a stale outlier.
+  if (!have_last || instant_ms > kWindowMs) {
+    head = 0;
+    count = 1;
+    ts[0] = now;
+    internal::frame_instant_ms().store(0.0f, std::memory_order_relaxed);
+    internal::frame_avg_ms().store(0.0f, std::memory_order_relaxed);
+    internal::frame_fps().store(0.0f, std::memory_order_relaxed);
     return;
   }
 
-  history_ms[next] = instant_ms;
-  next = (next + 1) % kWindow;
-  if (count < kWindow) {
+  const size_t tail = (head + count) % kCap;
+  ts[tail] = now;
+  if (count < kCap) {
     ++count;
+  } else {
+    head = (head + 1) % kCap;  // ring full: drop oldest
   }
-  double sum = 0.0;
-  for (size_t i = 0; i < count; ++i) {
-    sum += history_ms[i];
+
+  // Evict samples older than the window.
+  while (count > 1 &&
+         std::chrono::duration<double, std::milli>(now - ts[head]).count() >
+             kWindowMs) {
+    head = (head + 1) % kCap;
+    --count;
   }
-  double avg_ms = count ? sum / double(count) : 0.0;
+
+  const double span_ms =
+      std::chrono::duration<double, std::milli>(now - ts[head]).count();
+  const double fps =
+      (count > 1 && span_ms > 0.0) ? double(count - 1) * 1000.0 / span_ms : 0.0;
+  const double avg_ms = fps > 0.0 ? 1000.0 / fps : 0.0;
 
   internal::frame_instant_ms().store(float(instant_ms),
                                      std::memory_order_relaxed);
   internal::frame_avg_ms().store(float(avg_ms), std::memory_order_relaxed);
-  internal::frame_fps().store(float(avg_ms > 0.0 ? 1000.0 / avg_ms : 0.0),
-                              std::memory_order_relaxed);
+  internal::frame_fps().store(float(fps), std::memory_order_relaxed);
 }
 
 // Read the latest published stats (any thread).

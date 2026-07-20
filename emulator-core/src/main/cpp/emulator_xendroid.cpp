@@ -1126,6 +1126,13 @@ static jdouble j_instant_fps(JNIEnv* env, jobject thiz) {
     return instant_ms > 0.f ? (jdouble)(1000.0 / (double)instant_ms) : (jdouble)0.0;
 }
 
+// RenderDoc-style average fps over a ~1s window.
+static jdouble j_average_fps(JNIEnv* env, jobject thiz) {
+    float instant_ms = 0.f, avg_ms = 0.f, fps = 0.f;
+    xe::GetFrameStats(instant_ms, avg_ms, fps);
+    return (jdouble)fps;
+}
+
 // EFFECTIVE Display|show_debug_overlay, i.e. the live cvar AFTER any per-game config
 // overlay. xenia's LoadGameConfig applies a game-specific override into this cvar
 // during module load (on the detached boot thread), so the Compose overlay gate must
@@ -1467,6 +1474,7 @@ int register_xendroid_Emulator(JNIEnv* env){
             ,{"generate_config_xml", "(Ljava/lang/String;)Ljava/lang/String;", (void *) generate_config_xml}
             ,{"debug_overlay_text", "()Ljava/lang/String;", (void *) j_debug_overlay_text}
             ,{"instant_fps", "()D", (void *) j_instant_fps}
+            ,{"average_fps", "()D", (void *) j_average_fps}
             ,{"last_frame_time_ms", "()D", (void *) j_last_frame_time_ms}
             ,{"show_debug_overlay_enabled", "()Z", (void *) j_show_debug_overlay_enabled}
             ,{"compressIsoToZar", "(Ljava/lang/String;Ljava/lang/String;)I", (void *) j_compressIsoToZar}
