@@ -2,11 +2,12 @@ package xendroid.compose.settings
 
 import xendroid.compose.settings.Setting.*
 
-private fun b(s: String, n: String, t: String, d: Boolean) = Setting.Bool(s, n, t, d)
+private fun desc(n: String) = SettingDescriptions.byName[n] ?: ""
+private fun b(s: String, n: String, t: String, d: Boolean) = Setting.Bool(s, n, t, d, desc(n))
 private fun i(s: String, n: String, t: String, d: Int, lo: Int, hi: Int) =
-    Setting.IntRange(s, n, t, d, lo, hi)
+    Setting.IntRange(s, n, t, d, lo, hi, desc(n))
 private fun l(s: String, n: String, t: String, d: String, vararg o: Pair<String, String>) =
-    Setting.ListChoice(s, n, t, d, o.map { ListOption(it.first, it.second) })
+    Setting.ListChoice(s, n, t, d, o.map { ListOption(it.first, it.second) }, desc(n))
 
 object SettingsSchema {
 
@@ -26,7 +27,7 @@ object SettingsSchema {
             // dropdown. Native cvar also accepts -1 (auto = 75% of cores), but the template
             // ships 4 and a 0..5 slider is the intended UX.
             i("Vulkan", "vulkan_pipeline_creation_threads", "Pipeline creation threads", 4, 0, 5),
-            Action("Vulkan", "vulkan_lib_path", "Custom Vulkan driver", ""),
+            Action("Vulkan", "vulkan_lib_path", "Custom Vulkan driver", "", desc("vulkan_lib_path")),
             b("Vulkan", "adrenotools_force_max_clocks", "Force max GPU clocks (adrenotools)", false),
             // TU_DEBUG flags for the Turnip (Mesa freedreno) driver. Empty = driver default
             // (GMEM/tiled, fast); 'sysmem' forces untiled rendering (much slower) but avoids a
@@ -199,7 +200,7 @@ object SettingsSchema {
                 "0" to "error", "1" to "warning", "2" to "info", "3" to "debug"),
             b("Logging", "flush_log", "Flush log", true),
             i("Logging", "log_sessions_keep", "Shelved log sessions to keep", 4, 1, 16),
-            Action("Logging", "dump_session_logs", "Export session logs to Downloads", ""),
+            Action("Logging", "dump_session_logs", "Export session logs to Downloads", "", desc("dump_session_logs")),
         )),
 
         SettingsCategory("Content", listOf(
