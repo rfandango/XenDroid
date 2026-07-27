@@ -166,5 +166,8 @@ emulator-core/src/main/cpp/xenia/recent.toml
 /binary_cache/
 emulator-core/src/main/cpp/xenia/third_party/snappy/Makefile
 
+# IDE / AI Artifacts
+.artifacts/
+
 # Git worktrees (isolated workspaces)
 .worktrees/

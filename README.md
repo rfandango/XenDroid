@@ -30,6 +30,16 @@ them, and align the port as a consequence.
 
 See [BUILD.md](BUILD.md) for build instructions.
 
+## Documentation
+
+- [User Guide](docs/usage.md) - Requirements, installation, and ROMs.
+- [Architecture](docs/architecture.md) - Deep dive into how XenDroid works.
+- [Troubleshooting](docs/troubleshooting.md) - Fixes for common crashes and graphics issues.
+- [Game Compatibility](GAME_COMPAT.md) - Per-game settings and known issues.
+- [Frontend Integration](docs/frontend-integration.md) - Launching from ES-DE/Daijishō.
+- [Contributing](CONTRIBUTING.md) - How to help with development.
+- [AI Agent Guide](docs/agents.md) - Guidance for automated tools and LLMs.
+
 ## LICENSE
 
 Please check the LICENSE file under the appropriate file header and directory for detailed information.
