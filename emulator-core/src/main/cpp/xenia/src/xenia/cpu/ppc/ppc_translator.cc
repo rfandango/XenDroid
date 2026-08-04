@@ -7,6 +7,10 @@
  ******************************************************************************
  */
 
+#include <atomic>
+
+#include "xenia/base/logging.h"
+
 #include "xenia/cpu/ppc/ppc_translator.h"
 
 #include "xenia/base/assert.h"
@@ -35,6 +39,7 @@ DEFINE_bool(disable_context_promotion, false,
             "CPU");
 
 DECLARE_bool(debug);
+DECLARE_bool(store_all_context_values);
 
 namespace xe {
 namespace cpu {
@@ -65,6 +70,21 @@ PPCTranslator::PPCTranslator(PPCFrontend* frontend) : frontend_(frontend) {
 
   // Disable context promotion for debug, otherwise register changes won't apply
   // correctly
+  {
+    // The pass list is fixed when a translator is built from the pool, so
+    // report what this one actually got.
+    static std::atomic<bool> reported{false};
+    bool expected = false;
+    if (reported.compare_exchange_strong(expected, true)) {
+      XELOGI(
+          "PPCTranslator: context promotion {} (disable_context_promotion={}, "
+          "debug={}, store_all_context_values={})",
+          (!cvars::disable_context_promotion && !cvars::debug) ? "ENABLED"
+                                                              : "DISABLED",
+          cvars::disable_context_promotion, cvars::debug,
+          cvars::store_all_context_values);
+    }
+  }
   if (!cvars::disable_context_promotion && !cvars::debug) {
     if (validate) {
       compiler_->AddPass(std::make_unique<passes::ValidationPass>());

@@ -36,8 +36,10 @@ DEFINE_bool(
     "invalidation, which removes the offset-aliasing hazard that plausibly "
     "caused it). Disabling trades performance for current upstream's "
     "conservative behavior: every vector register access round-trips "
-    "through guest context memory.",
+    "through guest context memory. Forced off by disable_context_promotion.",
     "CPU");
+
+DECLARE_bool(disable_context_promotion);
 
 namespace xe {
 namespace cpu {
@@ -171,7 +173,8 @@ Value* ContextPromotionPass::LookupTrackedValue(uint32_t offset, uint32_t size,
 void ContextPromotionPass::PromoteBlock(Block* block) {
   auto& validity = context_validity_;
   validity.reset();
-  const bool promote_vec128 = cvars::context_promote_vec128;
+  const bool promote_vec128 =
+      cvars::context_promote_vec128 && !cvars::disable_context_promotion;
 
   Instr* i = block->instr_head;
   while (i) {
@@ -217,7 +220,8 @@ void ContextPromotionPass::RemoveDeadStoresBlock(Block* block) {
   // later store in this block, with no barrier or load in between".
   auto& validity = context_validity_;
   validity.reset();
-  const bool promote_vec128 = cvars::context_promote_vec128;
+  const bool promote_vec128 =
+      cvars::context_promote_vec128 && !cvars::disable_context_promotion;
 
   // Walk backwards and mark byte ranges that are written to.
   // If a store's whole range was already written to later, it is dead.
