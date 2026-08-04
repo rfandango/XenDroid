@@ -1,52 +1,82 @@
 package xendroid.compose.core
 
 import android.app.ActivityManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Binder
-import android.os.Bundle
+import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.Process
 import androidx.core.content.getSystemService
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Ties the single-shot :emu render process's lifetime to the MAIN process.
+ * Ties the single-shot :emu render process to the MAIN process.
  *
  * :emu is a separate OS process forked from the zygote, so it does NOT die when the
  * main process is closed, crashes, or is OOM-killed (Android never kills sibling
- * processes for you). We hand :emu a Binder owned by the main process; :emu
- * linkToDeath's it and hard-kills itself the instant the main process goes away.
- * We also kill any stale :emu before a fresh launch, so a wedged/orphaned core can
- * never block the next single-shot boot.
+ * processes for you). :emu binds [MainAliveService], which lives in the main process,
+ * and that one binding does both halves of the job:
+ *
+ *  - BIND_IMPORTANT raises the main process to :emu's process state. Without it the
+ *    launcher sits in the CACHED band for the whole session, making it the first thing
+ *    lmkd reaps under memory pressure - and since lmkd picks by oom_score_adj, not by
+ *    size, a 36MB launcher dies long before the 4GB game it launched.
+ *  - onServiceDisconnected/onBindingDied is the liveness signal: it fires when the main
+ *    process goes away, whatever the cause.
+ *
+ * Losing main is only fatal while :emu is NOT on screen. Hard-killing a game the user
+ * is actively playing because the launcher was reaped is never the right answer; the
+ * orphan this link guards against is a backgrounded/wedged core, and [killStaleEmu] is
+ * the second backstop for that. So a death that arrives mid-game is remembered and
+ * collected at the next onStop instead.
  */
 object EmuProcessLink {
-    private const val EXTRA_ALIVE_BUNDLE = "xendroid.alive_bundle"
-    private const val KEY_MAIN_ALIVE = "main_alive"
+    /** :emu only, held for the process lifetime (the connection outlives the Activity). */
+    private var appContext: Context? = null
 
-    /** Owned by the MAIN process (only attachMainAliveToken, called from the library,
-     *  ever reads it). The proxy handed to :emu therefore tracks the main process. */
-    private val mainAliveToken: IBinder = Binder()
+    /** :emu only: mirrors the host Activity's started/stopped state. */
+    private val emuForeground = AtomicBoolean(false)
 
-    /** Held alive for the :emu process lifetime so the death link is not GC'd. */
-    private val selfKill = object : IBinder.DeathRecipient {
-        override fun binderDied() = Process.killProcess(Process.myPid())
+    /** :emu only: the main process has died and this core is now an orphan. */
+    private val mainGone = AtomicBoolean(false)
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) = Unit
+
+        override fun onServiceDisconnected(name: ComponentName?) = onMainProcessGone()
+
+        override fun onBindingDied(name: ComponentName?) = onMainProcessGone()
     }
 
-    /** MAIN process: attach the liveness token to a live launch Intent. NOT for the
-     *  pinned-shortcut Intent (a Binder cannot be persisted). */
-    fun attachMainAliveToken(intent: Intent) {
-        intent.putExtra(EXTRA_ALIVE_BUNDLE, Bundle().apply {
-            putBinder(KEY_MAIN_ALIVE, mainAliveToken)
-        })
+    /** :emu process: bind for this process's lifetime. Call once from onCreate; a
+     *  failed bind just leaves :emu unlinked, as the shortcut path always was. */
+    fun bindToMainProcess(context: Context) {
+        val ctx = context.applicationContext
+        appContext = ctx
+        runCatching {
+            ctx.bindService(
+                Intent(ctx, MainAliveService::class.java),
+                connection,
+                Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT,
+            )
+        }
     }
 
-    /** :emu process: self-kill when the main process (the token's owner) dies. Call
-     *  once from EmulatorHostActivity.onCreate. No-op if no token (e.g. shortcut launch). */
-    fun bindToMainProcessDeath(intent: Intent) {
-        val token = intent.getBundleExtra(EXTRA_ALIVE_BUNDLE)?.getBinder(KEY_MAIN_ALIVE)
-            ?: return
-        runCatching { token.linkToDeath(selfKill, 0) }
-            .onFailure { Process.killProcess(Process.myPid()) }  // main already gone
+    /** :emu process: mirror of the host Activity's onStart/onStop. Backgrounding is
+     *  where a main-process death that arrived mid-game is finally collected. */
+    fun setEmuForeground(foreground: Boolean) {
+        emuForeground.set(foreground)
+        if (!foreground && mainGone.get()) Process.killProcess(Process.myPid())
+    }
+
+    private fun onMainProcessGone() {
+        mainGone.set(true)
+        // Stop BIND_AUTO_CREATE respawning the launcher we just outlived: main is
+        // usually gone from memory pressure, and its onCreate re-runs the Vulkan probe.
+        runCatching { appContext?.unbindService(connection) }
+        // On screen: the user is playing. Keep going; onStop collects this.
+        if (!emuForeground.get()) Process.killProcess(Process.myPid())
     }
 
     /** MAIN process: kill any leftover :emu before launching, so a wedged/orphaned

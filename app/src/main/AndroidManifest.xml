@@ -71,5 +71,9 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <!-- No android:process on purpose: must land in the main process. -->
+        <service
+            android:name="xendroid.compose.core.MainAliveService"
+            android:exported="false" />
     </application>
 </manifest>

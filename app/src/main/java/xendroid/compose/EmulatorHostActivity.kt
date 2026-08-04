@@ -141,9 +141,9 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
         // only hid the status bar, leaving the nav buttons overlaid on the game.
         enterImmersiveMode()
 
-        // Tie this :emu process to the main process: self-kill if the launcher dies
-        // (crash / OOM / swipe). Android does not kill this sibling process for us.
-        intent?.let { EmuProcessLink.bindToMainProcessDeath(it) }
+        // Tie this :emu process to the main process: keep the launcher out of the
+        // cached band (so lmkd stops reaping it mid-game) and notice if it dies anyway.
+        EmuProcessLink.bindToMainProcess(this)
 
         // In-app game_uri extra, or frontend shapes (AutoStartFile, data URI).
         val gameUri = FrontendLaunch.resolveGamePath(this, intent)
@@ -487,10 +487,14 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
         mainHandler.removeCallbacks(pauseOnFocusLost)
         if (session.booted) session.pause()
         brightnessSampler.stop()                          // no PixelCopy polling while stopped
+        // Last: an orphaned core (main process died while we were on screen) hard-kills
+        // here, so it does so from a paused, quiescent state.
+        EmuProcessLink.setEmuForeground(false)
     }
 
     override fun onStart() {
         super.onStart()
+        EmuProcessLink.setEmuForeground(true)
         if (overlayWantsBrightness) surfaceView?.let { brightnessSampler.start(it) }
         // Mirror of onStop. resumeIfPaused() (not bare resume) stays idempotent: the
         // swapchain-recreate path already calls resumeIfPaused() in surfaceCreated

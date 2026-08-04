@@ -218,14 +218,12 @@ fun GameLibraryScreen(
                         viewModel = viewModel,
                         onLaunch = { game ->
                             runCatching {
-                                // Reap any stale/orphaned :emu first (single-shot core), then
-                                // attach the main-process liveness token so the new :emu dies
-                                // with us. Token is added here, NOT in buildLaunchIntent, since
-                                // that Intent is reused for pinned shortcuts (no Binders on disk).
+                                // Reap any stale/orphaned :emu first (single-shot core). The
+                                // new :emu links itself to this process by binding
+                                // MainAliveService, so nothing rides on the Intent - which is
+                                // also why pinned shortcuts now get the same link.
                                 EmuProcessLink.killStaleEmu(context)
-                                val intent = viewModel.buildLaunchIntent(game)
-                                EmuProcessLink.attachMainAliveToken(intent)
-                                context.startActivity(intent)
+                                context.startActivity(viewModel.buildLaunchIntent(game))
                             }
                         },
                         // Long-press opens the per-game menu (independent of canLaunchGames,
