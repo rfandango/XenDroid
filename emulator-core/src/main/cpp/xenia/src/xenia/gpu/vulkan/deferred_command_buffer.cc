@@ -383,6 +383,19 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
             command_buffer, &input_attachment_index_info);
       } break;
 
+      case Command::kVkSetFragmentShadingRate: {
+        auto& args =
+            *reinterpret_cast<const ArgsVkSetFragmentShadingRate*>(stream);
+        VkExtent2D fragment_size;
+        fragment_size.width = args.width;
+        fragment_size.height = args.height;
+        VkFragmentShadingRateCombinerOpKHR combiner_ops[2] = {
+            VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+            VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+        command_processor_.SetFragmentShadingRate(
+            command_buffer, &fragment_size, combiner_ops);
+      } break;
+
       case Command::kVkSetBlendConstants: {
         auto& args = *reinterpret_cast<const ArgsVkSetBlendConstants*>(stream);
         dfn.vkCmdSetBlendConstants(command_buffer, args.blend_constants);

@@ -233,6 +233,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
           EXT_shader_demote_to_helper_invocation, 1, 3)
       // #423.
       XE_UI_VULKAN_LOCAL_EXTENSION(EXT_non_seamless_cube_map)
+      XE_UI_VULKAN_STRUCT_EXTENSION(KHR_fragment_shading_rate)
       // #226.
       XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(EXT_subgroup_size_control, 1, 3)
       // #322 (KHR) / #203 (NV). Barycentric coordinates for manual
@@ -359,6 +360,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT,
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NON_SEAMLESS_CUBE_MAP_FEATURES_EXT>
       features_EXT_non_seamless_cube_map;
+  VulkanFeatures<
+      VkPhysicalDeviceFragmentShadingRateFeaturesKHR,
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR>
+      features_KHR_fragment_shading_rate;
   VulkanFeatures<VkPhysicalDeviceDynamicRenderingFeatures,
                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES>
       features_1_3_KHR_dynamic_rendering;
@@ -447,6 +452,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     }
     if (ext_EXT_non_seamless_cube_map) {
       features_EXT_non_seamless_cube_map.Link(supported_features_2,
+                                              device_create_info);
+    }
+    if (device->extensions_.ext_KHR_fragment_shading_rate) {
+      features_KHR_fragment_shading_rate.Link(supported_features_2,
                                               device_create_info);
     }
     // Subgroup properties are Vulkan 1.1 core.
@@ -923,6 +932,13 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     if (with_gpu_emulation) {
       XE_UI_VULKAN_FEATURE_2(features_EXT_non_seamless_cube_map,
                              nonSeamlessCubeMap)
+    }
+  }
+
+  if (device->extensions_.ext_KHR_fragment_shading_rate) {
+    if (with_gpu_emulation) {
+      XE_UI_VULKAN_FEATURE_2(features_KHR_fragment_shading_rate,
+                             pipelineFragmentShadingRate)
     }
   }
 

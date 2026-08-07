@@ -413,6 +413,14 @@ class DeferredCommandBuffer {
     }
   }
 
+  void CmdVkSetFragmentShadingRate(uint32_t width, uint32_t height) {
+    auto& args = *reinterpret_cast<ArgsVkSetFragmentShadingRate*>(
+        WriteCommand(Command::kVkSetFragmentShadingRate,
+                     sizeof(ArgsVkSetFragmentShadingRate)));
+    args.width = width;
+    args.height = height;
+  }
+
   void CmdVkSetBlendConstants(const float* blend_constants) {
     auto& args = *reinterpret_cast<ArgsVkSetBlendConstants*>(WriteCommand(
         Command::kVkSetBlendConstants, sizeof(ArgsVkSetBlendConstants)));
@@ -659,6 +667,7 @@ class DeferredCommandBuffer {
     kVkPushConstants,
     kVkSetBlendConstants,
     kVkSetRenderingInputAttachmentIndices,
+    kVkSetFragmentShadingRate,
     kVkSetDepthBias,
     kVkSetScissor,
     kVkSetStencilCompareMask,
@@ -887,6 +896,11 @@ class DeferredCommandBuffer {
   struct ArgsVkSetRenderingInputAttachmentIndices {
     uint32_t color_attachment_count;
     uint32_t color_attachment_input_indices[4];
+  };
+
+  struct ArgsVkSetFragmentShadingRate {
+    uint32_t width;
+    uint32_t height;
   };
 
   struct ArgsVkSetDepthBias {

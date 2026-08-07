@@ -59,6 +59,13 @@ DEFINE_int32(
     "the number of threads explicitly (up to the number of logical CPU cores), "
     "0 to disable multithreaded pipeline creation.",
     "Vulkan");
+DEFINE_int32(
+    vulkan_vrs_probe, 0,
+    "DEBUG probe: force a coarse fragment shading rate on every guest "
+    "pipeline. 0 = off, 1 = 2x1, 2 = 2x2. Rendering becomes blocky; the "
+    "point is the frame time, to price VRS before building per-draw "
+    "selection. Takes effect on the next launch (baked into pipelines).",
+    "Vulkan");
 DEFINE_bool(
     vulkan_async_skip_draws, false,
     "With asynchronous shader compilation: don't wait for pipeline creation "
@@ -3354,6 +3361,14 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
   // invalidated (again, even if it has no effect).
   dynamic_states[dynamic_state.dynamicStateCount++] = VK_DYNAMIC_STATE_VIEWPORT;
   dynamic_states[dynamic_state.dynamicStateCount++] = VK_DYNAMIC_STATE_SCISSOR;
+  // Without this the pipeline keeps a static 1x1 rate that overrides every
+  // vkCmdSetFragmentShadingRateKHR. Keyed off the command being loadable, not
+  // the device property: some drivers report it without the entry point, and
+  // a dynamic state nothing sets leaves the driver on undefined state.
+  if (command_processor_.fragment_shading_rate_available()) {
+    dynamic_states[dynamic_state.dynamicStateCount++] =
+        VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR;
+  }
   if (!edram_fragment_shader_interlock) {
     dynamic_states[dynamic_state.dynamicStateCount++] =
         VK_DYNAMIC_STATE_DEPTH_BIAS;
@@ -3476,10 +3491,25 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
     }
   }
 
+  VkPipelineFragmentShadingRateStateCreateInfoKHR vrs_state;
   VkGraphicsPipelineCreateInfo pipeline_create_info;
   pipeline_create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
   pipeline_create_info.pNext =
       use_dynamic_rendering ? &pipeline_rendering_create_info : nullptr;
+  // Blanket rate, kept only for A/B against the per-draw path.
+  if (cvars::vulkan_vrs_probe > 0 &&
+      command_processor_.GetVulkanDevice()
+          ->properties()
+          .pipelineFragmentShadingRate) {
+    vrs_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR;
+    vrs_state.pNext = pipeline_create_info.pNext;
+    vrs_state.fragmentSize.width = 2;
+    vrs_state.fragmentSize.height = cvars::vulkan_vrs_probe >= 2 ? 2 : 1;
+    vrs_state.combinerOps[0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+    vrs_state.combinerOps[1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
+    pipeline_create_info.pNext = &vrs_state;
+  }
   pipeline_create_info.flags = 0;
   pipeline_create_info.stageCount = shader_stage_count;
   pipeline_create_info.pStages = shader_stages.data();

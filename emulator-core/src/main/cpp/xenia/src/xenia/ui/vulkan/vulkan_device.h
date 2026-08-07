@@ -185,6 +185,10 @@ class VulkanDevice {
 
     bool nonSeamlessCubeMap = false;
 
+    // VK_KHR_fragment_shading_rate (#227)
+
+    bool pipelineFragmentShadingRate = false;
+
     // VK_KHR_fragment_shader_barycentric (#322)
 
     bool fragmentShaderBarycentric = false;
@@ -237,6 +241,7 @@ class VulkanDevice {
     bool ext_KHR_swapchain = false;                     // #2
     bool ext_1_1_KHR_dedicated_allocation = false;      // #128
     bool ext_EXT_shader_stencil_export = false;         // #141
+    bool ext_KHR_fragment_shading_rate = false;         // #227
     bool ext_1_1_KHR_get_memory_requirements2 = false;  // #147
     bool ext_1_2_KHR_image_format_list = false;         // #148
     // Has optional features not implied by this being true.
