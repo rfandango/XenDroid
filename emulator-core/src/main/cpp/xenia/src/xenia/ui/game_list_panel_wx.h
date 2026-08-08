@@ -71,9 +71,12 @@ class GameListPanel : public wxPanel {
     uint32_t gamerscore_earned = 0;
   };
 
-  // Launches via launch_cb_ if the path exists; otherwise shows a missing-
-  // file warning and offers to browse for a replacement.
-  void LaunchOrPrompt(const std::filesystem::path& path);
+  // Selected entry, or nullptr if none.
+  const Entry* SelectedEntry() const;
+
+  // Launches `path` if it exists, else offers to browse for a replacement and
+  // drops the stale `path` from `title_id`.
+  void LaunchOrPrompt(uint32_t title_id, const std::filesystem::path& path);
 
   // Modal dialog for renaming/removing discs of a multi-disc title.
   void ShowEditDiscsDialog(size_t entry_index);

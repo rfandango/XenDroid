@@ -166,7 +166,6 @@ void PreciseSleep(std::chrono::nanoseconds duration) {
   NanoSleep(duration.count());
 }
 
-void NanoSleepPrecise(int64_t ns) { NanoSleep(ns); }
 void SyncMemory() { MemoryBarrier(); }
 
 void Sleep(std::chrono::microseconds duration) {
@@ -176,6 +175,8 @@ void Sleep(std::chrono::microseconds duration) {
     ::Sleep(static_cast<DWORD>(duration.count() / 1000));
   }
 }
+
+void NanoSleepPrecise(int64_t ns) { NanoSleep(ns); }
 
 SleepResult AlertableSleep(std::chrono::microseconds duration) {
   if (SleepEx(static_cast<DWORD>(duration.count() / 1000), true) ==
@@ -423,7 +424,7 @@ class Win32Timer : public Win32Handle<Timer> {
 
  public:
   explicit Win32Timer(HANDLE handle) : Win32Handle(handle) {}
-  ~Win32Timer() = default;
+  ~Win32Timer() { Cancel(); }
 
   bool SetOnceAfter(xe::chrono::hundrednanoseconds rel_time,
                     std::function<void()> opt_callback) override {
@@ -436,17 +437,8 @@ class Win32Timer : public Win32Handle<Timer> {
   }
   bool SetOnceAt(WClock_::time_point due_time,
                  std::function<void()> opt_callback) override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    callback_ = std::move(opt_callback);
-    LARGE_INTEGER due_time_li;
-    due_time_li.QuadPart = WClock_::to_file_time(due_time);
-    auto completion_routine =
-        callback_ ? reinterpret_cast<PTIMERAPCROUTINE>(CompletionRoutine)
-                  : NULL;
-    return SetWaitableTimer(handle_, &due_time_li, 0, completion_routine, this,
-                            false)
-               ? true
-               : false;
+    return Set(due_time, std::chrono::milliseconds::zero(),
+               std::move(opt_callback));
   }
 
   bool SetRepeatingAfter(
@@ -464,40 +456,58 @@ class Win32Timer : public Win32Handle<Timer> {
   bool SetRepeatingAt(WClock_::time_point due_time,
                       std::chrono::milliseconds period,
                       std::function<void()> opt_callback) override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    callback_ = std::move(opt_callback);
-    LARGE_INTEGER due_time_li;
-    due_time_li.QuadPart = WClock_::to_file_time(due_time);
-    auto completion_routine =
-        callback_ ? reinterpret_cast<PTIMERAPCROUTINE>(CompletionRoutine)
-                  : NULL;
-    return SetWaitableTimer(handle_, &due_time_li, int32_t(period.count()),
-                            completion_routine, this, false)
-               ? true
-               : false;
+    return Set(due_time, period, std::move(opt_callback));
   }
 
   bool Cancel() override {
-    // Reset the callback immediately so that any completions don't call it.
-    std::lock_guard<std::mutex> lock(mutex_);
-    callback_ = nullptr;
+    // Disarm outside mutex_, a running callback takes it to copy callback_.
+    if (auto wait_item = wait_item_.lock()) {
+      wait_item->Disarm();
+    }
     return CancelWaitableTimer(handle_) ? true : false;
   }
 
  private:
-  static void CompletionRoutine(Win32Timer* timer, DWORD timer_low,
-                                DWORD timer_high) {
+  bool Set(WClock_::time_point due_time, std::chrono::milliseconds period,
+           std::function<void()> opt_callback) {
+    // The handle carries the signaled state, the timer queue delivers the
+    // callback, an APC routine would need the arming thread to wait alertably.
+    Cancel();
+    std::lock_guard<std::mutex> lock(mutex_);
+    LARGE_INTEGER due_time_li;
+    due_time_li.QuadPart = WClock_::to_file_time(due_time);
+    if (!SetWaitableTimer(handle_, &due_time_li, int32_t(period.count()), NULL,
+                          NULL, false)) {
+      return false;
+    }
+    if (opt_callback) {
+      callback_ = std::move(opt_callback);
+      auto due = date::clock_cast<GClock_>(due_time);
+      if (period.count()) {
+        wait_item_ = QueueTimerRecurring(&CompletionRoutine, this, due, period);
+      } else {
+        wait_item_ = QueueTimerOnce(&CompletionRoutine, this, due);
+      }
+    }
+    return true;
+  }
+
+  static void CompletionRoutine(void* userdata) {
+    auto timer = static_cast<Win32Timer*>(userdata);
     // As the callback may reset the timer, store local.
     std::function<void()> callback;
     {
       std::lock_guard<std::mutex> lock(timer->mutex_);
       callback = timer->callback_;
     }
-    callback();
+    if (callback) {
+      callback();
+    }
   }
 
   std::mutex mutex_;
   std::function<void()> callback_;
+  std::weak_ptr<TimerQueueWaitItem> wait_item_;
 };
 
 std::unique_ptr<Timer> Timer::CreateManualResetTimer() {

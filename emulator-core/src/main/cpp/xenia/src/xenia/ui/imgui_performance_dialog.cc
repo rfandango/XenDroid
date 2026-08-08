@@ -19,9 +19,6 @@
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/ui/imgui_host_notification.h"
 
-DECLARE_bool(clear_memory_page_state);
-DECLARE_bool(readback_memexport);
-DECLARE_bool(readback_memexport_fast);
 DECLARE_string(readback_resolve);
 DECLARE_bool(guest_display_refresh_cap);
 DECLARE_string(occlusion_query);
@@ -38,7 +35,6 @@ ImGuiPerformanceDialog::ImGuiPerformanceDialog(
 
   // Initialize highlight positions to match current selections
   resolve_highlight_ = readback_resolve_mode_;
-  memexport_highlight_ = readback_memexport_mode_;
   occlusion_query_highlight_ = occlusion_query_mode_;
 }
 
@@ -64,29 +60,19 @@ void ImGuiPerformanceDialog::LoadCurrentSettings() {
     occlusion_query_mode_ = 0;  // Default to "fake"
   }
 
-  // Load Readback Resolve setting (0=none, 1=some, 2=fast, 3=full)
+  // Load Readback Resolve setting (0=none, 1=fast, 2=all)
   const std::string& resolve_mode = cvars::readback_resolve;
   if (resolve_mode == "none") {
     readback_resolve_mode_ = 0;
-  } else if (resolve_mode == "some") {
-    readback_resolve_mode_ = 1;
-  } else if (resolve_mode == "full") {
-    readback_resolve_mode_ = 3;
+  } else if (resolve_mode == "all") {
+    readback_resolve_mode_ = 2;
   } else {
-    readback_resolve_mode_ = 2;  // Default to "fast"
+    readback_resolve_mode_ = 1;  // Default to "fast"
   }
+  readback_resolve_sync_ = cvars::readback_resolve_sync;
 
-  // Load Readback Memexport setting (0=none, 1=fast, 2=full)
-  if (!cvars::readback_memexport) {
-    readback_memexport_mode_ = 0;
-  } else if (cvars::readback_memexport_fast) {
-    readback_memexport_mode_ = 1;
-  } else {
-    readback_memexport_mode_ = 2;
-  }
-
-  // Load Clear Memory Page State setting
-  clear_memory_page_state_ = cvars::clear_memory_page_state;
+  // Load Memexport Fence Wait setting
+  memexport_await_fences_ = cvars::memexport_await_fences;
 
   // Load Frame Rate Limit (FPS, 0 = unlimited)
   framerate_limit_ = static_cast<int>(cvars::framerate_limit);
@@ -119,11 +105,8 @@ void ImGuiPerformanceDialog::OnReadbackResolveChanged(int value) {
     case 0:
       mode = gpu::ReadbackResolveMode::kDisabled;
       break;
-    case 1:
-      mode = gpu::ReadbackResolveMode::kSome;
-      break;
-    case 3:
-      mode = gpu::ReadbackResolveMode::kFull;
+    case 2:
+      mode = gpu::ReadbackResolveMode::kAll;
       break;
     default:
       mode = gpu::ReadbackResolveMode::kFast;
@@ -132,35 +115,22 @@ void ImGuiPerformanceDialog::OnReadbackResolveChanged(int value) {
 
   command_processor->SetReadbackResolveMode(mode);
 
-  const char* mode_names[] = {"None", "Some", "Fast", "Full"};
+  const char* mode_names[] = {"None", "Fast", "All"};
   ShowNotification("Readback Resolve", mode_names[value]);
 }
 
-void ImGuiPerformanceDialog::OnReadbackMemexportChanged(int value) {
-  bool memexport_enabled = true;
-  bool memexport_fast = true;
-
-  switch (value) {
-    case 0:
-      memexport_enabled = false;
-      break;
-    case 1:
-      memexport_fast = true;
-      break;
-    case 2:
-      memexport_fast = false;
-      break;
-  }
-
-  gpu::SaveGPUSetting(gpu::GPUSetting::ReadbackMemexport, memexport_enabled);
-  gpu::SaveGPUSetting(gpu::GPUSetting::ReadbackMemexportFast, memexport_fast);
+void ImGuiPerformanceDialog::OnReadbackResolveSyncChanged(bool enabled) {
+  cvars::readback_resolve_sync = enabled;
   config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
-                                "readback_memexport", memexport_enabled);
-  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
-                                "readback_memexport_fast", memexport_fast);
+                                "readback_resolve_sync", enabled);
+  ShowNotification("Readback Resolve Sync", enabled ? "Enabled" : "Disabled");
+}
 
-  const char* mode_names[] = {"None", "Fast", "Full"};
-  ShowNotification("Readback Memexport", mode_names[value]);
+void ImGuiPerformanceDialog::OnMemexportAwaitFencesChanged(bool enabled) {
+  gpu::SaveGPUSetting(gpu::GPUSetting::MemexportAwaitFences, enabled);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
+                                "memexport_await_fences", enabled);
+  ShowNotification("Memexport Fence Wait", enabled ? "Enabled" : "Disabled");
 }
 
 void ImGuiPerformanceDialog::OnEmulatedDisplayUncappedChanged(bool uncapped) {
@@ -206,13 +176,6 @@ void ImGuiPerformanceDialog::OnOcclusionQueryChanged(int value) {
 
   const char* mode_names[] = {"Fake", "Fast", "Fast-Alt", "Strict"};
   ShowNotification("Occlusion Query Mode", mode_names[static_cast<int>(mode)]);
-}
-
-void ImGuiPerformanceDialog::OnClearMemoryPageStateChanged(bool enabled) {
-  gpu::SaveGPUSetting(gpu::GPUSetting::ClearMemoryPageState, enabled);
-  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
-                                "clear_memory_page_state", enabled);
-  ShowNotification("Clear Memory Page State", enabled ? "Enabled" : "Disabled");
 }
 
 void ImGuiPerformanceDialog::OnFramerateLimitChanged(int value) {
@@ -270,8 +233,8 @@ void ImGuiPerformanceDialog::OnDraw(ImGuiIO& io) {
 
     ImGui::Indent(10);
     ImGui::PushID("resolve");
-    const char* resolve_labels[] = {"None", "Some", "Fast", "Full"};
-    for (int i = 0; i < 4; i++) {
+    const char* resolve_labels[] = {"None", "Fast", "All"};
+    for (int i = 0; i < 3; i++) {
       bool is_selected = (readback_resolve_mode_ == i);
       bool is_highlighted = (resolve_highlight_ == i);
 
@@ -291,9 +254,13 @@ void ImGuiPerformanceDialog::OnDraw(ImGuiIO& io) {
         ImGui::PopStyleColor();
       }
 
-      if (i < 3) {
+      if (i < 2) {
         ImGui::SameLine();
       }
+    }
+    if (ImGui::Checkbox("Synchronous copies (stall GPU)",
+                        &readback_resolve_sync_)) {
+      OnReadbackResolveSyncChanged(readback_resolve_sync_);
     }
     ImGui::PopID();
     ImGui::Unindent(10);
@@ -302,37 +269,15 @@ void ImGuiPerformanceDialog::OnDraw(ImGuiIO& io) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Readback Memexport section
     ImGui::PushStyleColor(ImGuiCol_Text, xbox_green);
-    ImGui::Text("Readback Memexport");
+    ImGui::Text("Memory Export");
     ImGui::PopStyleColor();
 
     ImGui::Indent(10);
     ImGui::PushID("memexport");
-    const char* memexport_labels[] = {"None", "Fast", "Full"};
-    for (int i = 0; i < 3; i++) {
-      bool is_selected = (readback_memexport_mode_ == i);
-      bool is_highlighted = (memexport_highlight_ == i);
-
-      if (is_highlighted && !is_selected) {
-        ImGui::PushStyleColor(ImGuiCol_Text, highlight_color);
-      }
-
-      if (ImGui::RadioButton(memexport_labels[i], is_selected)) {
-        if (!is_selected) {
-          readback_memexport_mode_ = i;
-          memexport_highlight_ = i;
-          OnReadbackMemexportChanged(i);
-        }
-      }
-
-      if (is_highlighted && !is_selected) {
-        ImGui::PopStyleColor();
-      }
-
-      if (i < 2) {
-        ImGui::SameLine();
-      }
+    if (ImGui::Checkbox("Wait for exports before fences (stall GPU)",
+                        &memexport_await_fences_)) {
+      OnMemexportAwaitFencesChanged(memexport_await_fences_);
     }
     ImGui::PopID();
     ImGui::Unindent(10);
@@ -398,24 +343,6 @@ void ImGuiPerformanceDialog::OnDraw(ImGuiIO& io) {
     ImGui::SameLine();
     if (ImGui::Button("Set##framerate_limit")) {
       OnFramerateLimitChanged(framerate_limit_);
-    }
-
-    ImGui::Unindent(10);
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Other section
-    ImGui::PushStyleColor(ImGuiCol_Text, xbox_green);
-    ImGui::Text("Other");
-    ImGui::PopStyleColor();
-
-    ImGui::Indent(10);
-
-    if (ImGui::Checkbox("Clear memory page state on GPU cache invalidation",
-                        &clear_memory_page_state_)) {
-      OnClearMemoryPageStateChanged(clear_memory_page_state_);
     }
 
     ImGui::Unindent(10);

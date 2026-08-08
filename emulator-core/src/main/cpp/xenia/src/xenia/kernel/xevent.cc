@@ -14,6 +14,7 @@
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/memory.h"
@@ -30,10 +31,12 @@ void XEvent::Initialize(bool manual_reset, bool initial_state) {
   assert_false(event_);
 
   manual_reset_ = manual_reset;
-  this->CreateNative<X_KEVENT>();
+  CreateNative<X_KEVENT>();
   auto* kevent = memory()->TranslateVirtual<X_KEVENT*>(guest_object());
   // Don't touch header.wait_list: SetNativePointer stashes the handle there.
-  kevent->header.type = manual_reset ? 0 : 1;  // 0=notification, 1=sync
+  kevent->header.type = manual_reset
+                            ? X_DISPATCHER_FLAGS::DISPATCHER_MANUAL_RESET_EVENT
+                            : X_DISPATCHER_FLAGS::DISPATCHER_AUTO_RESET_EVENT;
   kevent->header.signal_state = initial_state ? 1 : 0;
 
   if (manual_reset) {
@@ -45,14 +48,15 @@ void XEvent::Initialize(bool manual_reset, bool initial_state) {
   RecordCreator();
 }
 
-void XEvent::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
+void XEvent::InitializeNative(void* native_ptr,
+                              const X_DISPATCH_HEADER* header) {
   assert_false(event_);
 
   switch (header->type) {
-    case 0x00:  // EventNotificationObject (manual reset)
+    case X_DISPATCHER_FLAGS::DISPATCHER_MANUAL_RESET_EVENT:
       manual_reset_ = true;
       break;
-    case 0x01:  // EventSynchronizationObject (auto reset)
+    case X_DISPATCHER_FLAGS::DISPATCHER_AUTO_RESET_EVENT:
       manual_reset_ = false;
       break;
     default:
@@ -112,17 +116,33 @@ int32_t XEvent::Set(uint32_t priority_increment, bool wait) {
   event_->Set();
   memory()->TranslateVirtual<X_KEVENT*>(guest_object())->header.signal_state =
       1;
+  WakeCooperativeWaiters();
   return 1;
 }
 
 int32_t XEvent::Pulse(uint32_t priority_increment, bool wait) {
   set_priority_increment(priority_increment);
   RecordSetter();
+  auto* kevent = memory()->TranslateVirtual<X_KEVENT*>(guest_object());
+  // KePulseEvent returns the pre-pulse signal state.
+  int32_t old_signal_state = kevent->header.signal_state;
+  // A parked cooperative waiter re-polls only after a host pulse has already
+  // reset the event, so every pulse would be lost. Deliver as a set the first
+  // waiter consumes, which for an auto-reset event with a waiter is exactly
+  // pulse semantics.
+  if (!manual_reset_ && waiters_.HasWaiters()) {
+    Set(priority_increment, wait);
+    return old_signal_state;
+  }
+  if (manual_reset_) {
+    // Releases every waiter parked right now. Must precede the wake below.
+    pulse_epoch_.fetch_add(1);
+  }
   event_->Pulse();
   // Pulse leaves the event reset after releasing waiters.
-  memory()->TranslateVirtual<X_KEVENT*>(guest_object())->header.signal_state =
-      0;
-  return 1;
+  kevent->header.signal_state = 0;
+  WakeCooperativeWaiters();
+  return old_signal_state;
 }
 
 int32_t XEvent::Reset() {
@@ -138,6 +158,16 @@ void XEvent::WaitCallback() {
     memory()->TranslateVirtual<X_KEVENT*>(guest_object())->header.signal_state =
         0;
   }
+}
+
+void XEvent::CooperativeWaitBegin(XThread* thread) { waiters_.Add(thread); }
+
+void XEvent::CooperativeWaitEnd(XThread* thread) { waiters_.Remove(thread); }
+
+// An auto-reset set with a parked waiter belongs to the front of the queue.
+// NT wakes the first waiter directly, so a later poller must not steal it.
+bool XEvent::CooperativeMayAcquire(XThread* thread) {
+  return manual_reset_ || waiters_.MayAcquire(thread);
 }
 void XEvent::Query(uint32_t* out_type, uint32_t* out_state) {
   auto [type, state] = event_->Query();

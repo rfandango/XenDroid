@@ -71,8 +71,14 @@ namespace xam {
 // https://github.com/tpn/winsdk-10/blob/master/Include/10.0.14393.0/km/wdm.h#L15539
 typedef enum _MODE { KernelMode, UserMode, MaximumMode } MODE;
 
-dword_result_t XamFeatureEnabled_entry(dword_t app_id) { return 0; }
-DECLARE_XAM_EXPORT1(XamFeatureEnabled, kNone, kStub);
+dword_result_t XamFeatureEnabled_entry(qword_t feature_bit) {
+  const std::bitset<36> feature(0x40ffffffff);
+  if (feature.test(feature_bit)) {
+    return 1;
+  }
+  return 0;
+}
+DECLARE_XAM_EXPORT1(XamFeatureEnabled, kNone, kImplemented);
 
 dword_result_t XamGetStagingMode_entry() { return cvars::staging_mode; }
 DECLARE_XAM_EXPORT1(XamGetStagingMode, kNone, kStub);
@@ -180,25 +186,26 @@ DECLARE_XAM_EXPORT1(XamBuildXamResourceLocator, kNone, kImplemented);
 
 dword_result_t XamGetCachedTitleName_entry(dword_t title_id,
                                            dword_t title_name_address,
-                                           lpdword_t title_name_size_ptr) {
-  if (!title_name_address || !title_name_size_ptr) {
+                                           lpdword_t title_name_length_ptr) {
+  char16_t* title_name_ptr =
+      kernel_state()->memory()->TranslateVirtual<char16_t*>(title_name_address);
+
+  if (!title_id) {
+    *title_name_ptr = 0;
+    *title_name_length_ptr = 1;
+
     return X_ERROR_INVALID_PARAMETER;
   }
 
   assert_false(title_id != kernel_state()->title_id());
 
-  char16_t* title_name_ptr =
-      kernel_state()->memory()->TranslateVirtual<char16_t*>(title_name_address);
-
   std::u16string title_name = xe::to_utf16(
       kernel_state()->emulator()->game_info_database()->GetTitleName());
 
-  size_t title_name_size = string_util::size_in_bytes(title_name, true);
+  xe::string_util::copy_and_swap_truncating(title_name_ptr, title_name,
+                                            title_name.size() + 1);
 
-  string_util::copy_and_swap_truncating(title_name_ptr, title_name,
-                                        title_name_size);
-
-  *title_name_size_ptr = static_cast<uint32_t>(title_name_size);
+  *title_name_length_ptr = title_name.size() + 1;
 
   return X_ERROR_SUCCESS;
 }

@@ -11,6 +11,7 @@
 #include "xenia/vfs/virtual_file_system.h"
 
 #include "xenia/base/byte_stream.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 
 namespace xe {
@@ -35,19 +36,25 @@ XFile::~XFile() {
   file_->Destroy();
 }
 
-uint64_t XFile::position() const {
-  std::lock_guard<std::mutex> lock(file_lock_);
-  return position_;
-}
+uint64_t XFile::position() const { return position_.load(); }
 
-void XFile::set_position(uint64_t value) {
-  std::lock_guard<std::mutex> lock(file_lock_);
-  position_ = value;
-}
+void XFile::set_position(uint64_t value) { position_.store(value); }
 
 X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
                                size_t length, const std::string_view file_name,
                                bool restart) {
+  // The I/O worker may already hold file_lock_ for a slow read.
+  X_STATUS result = X_STATUS_SUCCESS;
+  kernel_state()->guest_scheduler()->RunBlockingHostCall([&]() {
+    result = QueryDirectoryInternal(out_info, length, file_name, restart);
+  });
+  return result;
+}
+
+X_STATUS XFile::QueryDirectoryInternal(X_FILE_DIRECTORY_INFORMATION* out_info,
+                                       size_t length,
+                                       const std::string_view file_name,
+                                       bool restart) {
   std::lock_guard<std::mutex> lock(file_lock_);
   assert_not_null(out_info);
 
@@ -102,9 +109,15 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
 X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
                      uint64_t byte_offset, uint32_t* out_bytes_read,
                      uint32_t apc_context, bool notify_completion) {
-  std::lock_guard<std::mutex> lock(file_lock_);
-  return ReadInternal(buffer_guest_address, buffer_length, byte_offset,
-                      out_bytes_read, apc_context, notify_completion);
+  // file_lock_ is taken inside the closure, on the I/O worker, so it is never
+  // held while the calling fiber is parked.
+  X_STATUS result = X_STATUS_SUCCESS;
+  kernel_state()->guest_scheduler()->RunBlockingHostCall([&]() {
+    std::lock_guard<std::mutex> lock(file_lock_);
+    result = ReadInternal(buffer_guest_address, buffer_length, byte_offset,
+                          out_bytes_read, apc_context, notify_completion);
+  });
+  return result;
 }
 
 X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
@@ -113,7 +126,7 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
                              bool notify_completion) {
   if (byte_offset == uint64_t(-1)) {
     // Read from current position.
-    byte_offset = position_;
+    byte_offset = position_.load();
   }
 
   size_t bytes_read = 0;
@@ -174,9 +187,9 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
             }
 
             if (byte_offset) {
-              position_ = byte_offset;
+              position_.store(byte_offset);
             }
-            position_ += bytes_read;
+            position_.fetch_add(bytes_read);
           }
         }
       }
@@ -204,6 +217,19 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
 X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
                             uint64_t byte_offset, uint32_t* out_bytes_read,
                             uint32_t apc_context) {
+  // The whole loop as one unit, so the fiber parks once.
+  X_STATUS result = X_STATUS_SUCCESS;
+  kernel_state()->guest_scheduler()->RunBlockingHostCall([&]() {
+    result = ReadScatterInternal(segments_guest_address, length, byte_offset,
+                                 out_bytes_read, apc_context);
+  });
+  return result;
+}
+
+X_STATUS XFile::ReadScatterInternal(uint32_t segments_guest_address,
+                                    uint32_t length, uint64_t byte_offset,
+                                    uint32_t* out_bytes_read,
+                                    uint32_t apc_context) {
   std::lock_guard<std::mutex> lock(file_lock_);
   X_STATUS result = X_STATUS_SUCCESS;
 
@@ -262,10 +288,22 @@ X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
 X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
                       uint64_t byte_offset, uint32_t* out_bytes_written,
                       uint32_t apc_context) {
+  X_STATUS result = X_STATUS_SUCCESS;
+  kernel_state()->guest_scheduler()->RunBlockingHostCall([&]() {
+    result = WriteInternal(buffer_guest_address, buffer_length, byte_offset,
+                           out_bytes_written, apc_context);
+  });
+  return result;
+}
+
+X_STATUS XFile::WriteInternal(uint32_t buffer_guest_address,
+                              uint32_t buffer_length, uint64_t byte_offset,
+                              uint32_t* out_bytes_written,
+                              uint32_t apc_context) {
   std::lock_guard<std::mutex> lock(file_lock_);
   if (byte_offset == uint64_t(-1)) {
     // Write from current position.
-    byte_offset = position_;
+    byte_offset = position_.load();
   }
 
   size_t bytes_written = 0;
@@ -274,7 +312,7 @@ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
                          buffer_length),
       size_t(byte_offset), &bytes_written);
   if (XSUCCEEDED(result)) {
-    position_ += bytes_written;
+    position_.fetch_add(bytes_written);
   }
 
   XIOCompletion::IONotification notify;
@@ -293,8 +331,12 @@ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
 }
 
 X_STATUS XFile::SetLength(size_t length) {
-  std::lock_guard<std::mutex> lock(file_lock_);
-  return file_->SetLength(length);
+  X_STATUS result = X_STATUS_SUCCESS;
+  kernel_state()->guest_scheduler()->RunBlockingHostCall([&]() {
+    std::lock_guard<std::mutex> lock(file_lock_);
+    result = file_->SetLength(length);
+  });
+  return result;
 }
 X_STATUS XFile::Rename(const std::filesystem::path file_path) {
   entry()->Rename(file_path);

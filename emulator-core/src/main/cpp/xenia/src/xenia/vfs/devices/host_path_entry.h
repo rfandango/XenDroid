@@ -55,6 +55,10 @@ class HostPathEntry : public Entry {
       const std::vector<std::string_view>& path_parts) override;
 
   std::filesystem::path host_path_;
+  // When set, size_ is a synthesized value (e.g. an STFS container size for a
+  // collapsed content package) and update() must not overwrite it with the
+  // backing file's real size.
+  bool reported_size_fixed_ = false;
 };
 
 }  // namespace vfs

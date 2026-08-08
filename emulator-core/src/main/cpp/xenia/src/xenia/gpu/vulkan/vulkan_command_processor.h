@@ -10,6 +10,7 @@
 #ifndef XENIA_GPU_VULKAN_VULKAN_COMMAND_PROCESSOR_H_
 #define XENIA_GPU_VULKAN_VULKAN_COMMAND_PROCESSOR_H_
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <climits>
@@ -20,6 +21,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -156,7 +158,6 @@ class VulkanCommandProcessor final : public CommandProcessor {
 
   void ClearCaches() override;
   void InvalidateGpuMemory() override;
-  void ClearReadbackBuffers() override;
 
   void TracePlaybackWroteMemory(uint32_t base_ptr, uint32_t length) override;
 
@@ -233,6 +234,16 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Returns whether any barriers have been submitted - if true is returned, the
   // render pass will also be closed.
   bool SubmitBarriers(bool force_end_render_pass);
+
+  // If [base_bytes, base_bytes + size_bytes) holds memexport output (which
+  // under two-buffer routing lives in the host-imported buffer aliasing guest
+  // RAM), copies it into the device-local buffer so a following device-buffer
+  // read - a texture load - sees it. No-op for non-memexport ranges (already in
+  // the device buffer) and when the host buffer is unavailable. Called by the
+  // texture cache before loading a texture. Ends the render pass.
+  // Returns whether it copied, so an upload of the same range can be skipped.
+  bool EnsureMemexportRangeInDeviceBuffer(uint32_t base_bytes,
+                                          uint32_t size_bytes);
 
   // If not started yet, begins a render pass from the render target cache.
   // Submission must be open.
@@ -344,9 +355,6 @@ class VulkanCommandProcessor final : public CommandProcessor {
                  bool major_mode_explicit) override;
   bool IssueCopy() override;
 
-  void IssueDraw_MemexportReadbackFullPath(uint32_t memexport_total_size);
-  void IssueDraw_MemexportReadbackFastPath(uint32_t memexport_total_size);
-
   void InitializeTrace() override;
 
  private:
@@ -419,12 +427,18 @@ class VulkanCommandProcessor final : public CommandProcessor {
     explicit PipelineLayout(
         VkPipelineLayout pipeline_layout,
         VkDescriptorSetLayout descriptor_set_layout_textures_vertex_ref,
-        VkDescriptorSetLayout descriptor_set_layout_textures_pixel_ref)
+        VkDescriptorSetLayout descriptor_set_layout_textures_pixel_ref,
+        uint32_t texture_count_vertex, uint32_t sampler_count_vertex,
+        uint32_t texture_count_pixel, uint32_t sampler_count_pixel)
         : pipeline_layout_(pipeline_layout),
           descriptor_set_layout_textures_vertex_ref_(
               descriptor_set_layout_textures_vertex_ref),
           descriptor_set_layout_textures_pixel_ref_(
-              descriptor_set_layout_textures_pixel_ref) {}
+              descriptor_set_layout_textures_pixel_ref),
+          texture_count_vertex_(texture_count_vertex),
+          sampler_count_vertex_(sampler_count_vertex),
+          texture_count_pixel_(texture_count_pixel),
+          sampler_count_pixel_(sampler_count_pixel) {}
     VkPipelineLayout GetPipelineLayout() const override {
       return pipeline_layout_;
     }
@@ -434,11 +448,21 @@ class VulkanCommandProcessor final : public CommandProcessor {
     VkDescriptorSetLayout descriptor_set_layout_textures_pixel_ref() const {
       return descriptor_set_layout_textures_pixel_ref_;
     }
+    // The binding counts the texture set layouts were built for - lets the
+    // draw path verify a set allocation against the layout it will use.
+    uint32_t texture_count_vertex() const { return texture_count_vertex_; }
+    uint32_t sampler_count_vertex() const { return sampler_count_vertex_; }
+    uint32_t texture_count_pixel() const { return texture_count_pixel_; }
+    uint32_t sampler_count_pixel() const { return sampler_count_pixel_; }
 
    private:
     VkPipelineLayout pipeline_layout_;
     VkDescriptorSetLayout descriptor_set_layout_textures_vertex_ref_;
     VkDescriptorSetLayout descriptor_set_layout_textures_pixel_ref_;
+    uint32_t texture_count_vertex_;
+    uint32_t sampler_count_vertex_;
+    uint32_t texture_count_pixel_;
+    uint32_t sampler_count_pixel_;
   };
 
   struct UsedSingleTransientDescriptor {
@@ -492,9 +516,6 @@ class VulkanCommandProcessor final : public CommandProcessor {
            GetCompletedSubmission() + 1u >= GetCurrentSubmission();
   }
 
-  // Requests a readback buffer for CPU access to GPU data.
-  VkBuffer RequestReadbackBuffer(uint32_t size);
-
   void ClearTransientDescriptorPools();
 
   void SplitPendingBarrier();
@@ -547,8 +568,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
       uint32_t used_texture_mask, reg::RB_DEPTHCONTROL normalized_depth_control,
       uint32_t normalized_color_mask,
       const draw_util::HostDepthPolygonOffset* host_depth_polygon_offset);
+  // *_bindings_ready is IssueDraw's per-draw readiness snapshot, the same one
+  // the sampler collection used - re-reading bindings_ready() here would race
+  // translation finishing mid-draw.
   bool UpdateBindings(const VulkanShader* vertex_shader,
-                      const VulkanShader* pixel_shader);
+                      const VulkanShader* pixel_shader,
+                      bool vertex_bindings_ready, bool pixel_bindings_ready,
+                      bool interpreter_placeholder = false,
+                      bool placeholder_pixel_shader = false);
   // Allocates a descriptor set and fills one or two VkWriteDescriptorSet
   // structure instances (for images and samplers).
   // The descriptor set layout must be the one for the given is_vertex,
@@ -600,6 +627,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
     uint64_t submission = 0;
     uint32_t query_index = UINT32_MAX;
     uint32_t query_generation = 0;
+    uint32_t scale_area = 1;
     bool uses_fsi_counter = false;
     ReportHandle report_handle = kInvalidReportHandle;
   };
@@ -651,6 +679,8 @@ class VulkanCommandProcessor final : public CommandProcessor {
     uint64_t draws = 0;
     uint64_t render_pass_begins = 0;
     uint64_t primary_buffer_splits = 0;
+    uint64_t rb_uma_direct = 0;
+    uint64_t rb_uma_first_use = 0;
     uint64_t last_report_ns = 0;
   };
   VkFrameSyncStats vk_frame_sync_stats_;
@@ -719,17 +749,34 @@ class VulkanCommandProcessor final : public CommandProcessor {
                            kPassTimestampRingSubmissions>
       pass_ts_draws_{};
   uint32_t pass_open_draws_ = 0;
+  // Largest scissor corner seen among the draws of the currently open pass -
+  // the region actually touched, as opposed to the full EDRAM-derived
+  // framebuffer the render area is set to.
+  uint32_t pass_open_scissor_w_ = 0;
+  uint32_t pass_open_scissor_h_ = 0;
+  // Same for the viewport, which bounds the draw even when the guest leaves
+  // the scissor wide open.
+  uint32_t pass_open_viewport_w_ = 0;
+  uint32_t pass_open_viewport_h_ = 0;
+  std::array<uint32_t, size_t(kPassTimestampPairsPerSubmission) *
+                           kPassTimestampRingSubmissions>
+      pass_ts_scissor_{};
+  std::array<uint32_t, size_t(kPassTimestampPairsPerSubmission) *
+                           kPassTimestampRingSubmissions>
+      pass_ts_viewport_{};
   struct PassBucketStat {
     uint64_t ns = 0;
     uint64_t passes = 0;
     uint64_t draws = 0;
+    uint32_t max_scissor_w = 0;
+    uint32_t max_scissor_h = 0;
+    uint32_t max_viewport_w = 0;
+    uint32_t max_viewport_h = 0;
   };
   // Accumulated per bucket key since the last report.
   std::map<uint32_t, PassBucketStat> pass_bucket_stats_;
   void OpenPassTimestamp(uint32_t bucket_key);
   void ClosePassTimestamp();
-  // Completion of resolve readback copies on the dedicated transfer queue.
-  ui::vulkan::VulkanGPUCompletionTimeline transfer_completion_timeline_;
   bool submission_open_ = false;
   // In case vkQueueSubmit fails after something like a successful
   // vkQueueBindSparse, to wait correctly on the next attempt.
@@ -784,6 +831,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
   VkDescriptorSetLayout descriptor_set_layout_shared_memory_and_edram_ =
       VK_NULL_HANDLE;
 
+  // Guards the layout maps below - GetPipelineLayout is called both from the
+  // draw thread and from pipeline creation threads (for deferred translation).
+  std::mutex pipeline_layouts_mutex_;
   // Descriptor set layouts are referenced by pipeline_layouts_.
   std::unordered_map<TextureDescriptorSetLayoutKey, VkDescriptorSetLayout,
                      TextureDescriptorSetLayoutKey::Hasher>
@@ -845,6 +895,16 @@ class VulkanCommandProcessor final : public CommandProcessor {
 
   VkDescriptorPool shared_memory_and_edram_descriptor_pool_ = VK_NULL_HANDLE;
   VkDescriptorSet shared_memory_and_edram_descriptor_set_;
+  // Second set identical to the one above except binding 0 points at the
+  // host-imported shared-memory buffer (aliasing guest RAM). Bound instead of
+  // the device set for memexport-touching draws so their GPU-written geometry
+  // stays coherent with the CPU. VK_NULL_HANDLE when the host buffer is
+  // unavailable - routing is then disabled and every draw uses the device set.
+  VkDescriptorSet shared_memory_host_and_edram_descriptor_set_ = VK_NULL_HANDLE;
+  // Two-buffer memexport page tracking (data + methods), shared with the D3D12
+  // backend as a class-body fragment so each backend gets its own non-virtual,
+  // inlinable copy. Requires <array> and SharedMemory, both included above.
+#include "../command_processor_memexport.inc"
 
   // Bytes 0x0...0x3FF - 256-entry gamma ramp table with B10G10R10X2 data (read
   // as R10G10B10X2 with swizzle).
@@ -916,16 +976,6 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Resolve downscale compute shader for scaled resolution readback.
   // Downscales scaled resolve buffer data back to 1x resolution on the GPU,
   // avoiding expensive CPU-side downscaling and reducing transfer bandwidth.
-  struct ResolveDownscaleConstants {
-    uint32_t scale_x;              // 1 to kMaxDrawResolutionScaleAlongAxis
-    uint32_t scale_y;              // 1 to kMaxDrawResolutionScaleAlongAxis
-    uint32_t pixel_size_log2;      // 0=8bit, 1=16bit, 2=32bit, 3=64bit
-    uint32_t tile_count;           // Number of 32x32 tiles to process
-    uint32_t source_offset_bytes;  // Byte offset into source buffer
-    // When non-zero, apply half-pixel offset correction by sampling from
-    // (scale/2, scale/2) within each scaled block instead of (0, 0).
-    uint32_t half_pixel_offset;
-  };
   VkDescriptorSetLayout resolve_downscale_descriptor_set_layout_ =
       VK_NULL_HANDLE;
   VkPipelineLayout resolve_downscale_pipeline_layout_ = VK_NULL_HANDLE;
@@ -1195,6 +1245,10 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Float constant usage masks of the last draw call.
   uint64_t current_float_constant_map_vertex_[4];
   uint64_t current_float_constant_map_pixel_[4];
+  // True if the vertex float constant buffer holds the full unpacked 256 float
+  // constants for the ucode interpreter rather than a shader's packed subset.
+  // Used to invalidate the binding when switching interpreter <-> normal.
+  bool float_constants_vertex_are_full_ = false;
 
   // System shader constants, including user clip planes and tessellation
   // constants.
@@ -1203,65 +1257,16 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Temporary storage for memexport stream constants used in the draw.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
 
-  // Per-resolve double-buffered readback for delayed sync
-  struct ReadbackBuffer {
-    VkBuffer buffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    VkDeviceMemory memories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    uint32_t sizes[2] = {0, 0};
-    void* mapped_data[2] = {nullptr, nullptr};  // Persistent mappings
-    uint32_t current_index = 0;
-    uint64_t last_used_frame = 0;
-    // uma mode only: the submission index that last resolved this destination.
-    // The direct read waits for it to retire before reading shared memory so it
-    // never races an in-flight GPU write. 0 means never resolved.
-    uint64_t last_write_submission = 0;
-  };
-
-  // A resolve readback copy deferred to the transfer queue (DMA engine),
-  // flushed as a batch after the graphics submission that produced its source
-  // data.
-  struct PendingReadbackCopy {
-    ReadbackBuffer* readback_buffer;
-    uint32_t buffer_index;
-    uint32_t src_offset;
-    uint32_t size;
-  };
-
-  // Records the pending readback copies into a transfer command buffer and
-  // submits them to the dedicated transfer queue, waiting on the just-submitted
-  // graphics work via graphics_signal_semaphore. Stamps the transfer submission
-  // onto each target buffer and clears the pending list.
-  bool SubmitReadbackCopiesToTransferQueue(
-      VkSemaphore graphics_signal_semaphore);
-  // Reclaims transfer command buffers and graphics->transfer semaphores whose
-  // transfer submission has completed.
-  void ReclaimCompletedTransferResources();
-
-  // Helper to evict old readback buffers from a cache map
-  void EvictOldReadbackBuffers(
-      std::unordered_map<uint64_t, ReadbackBuffer>& buffer_map);
-
-  // Map: (written_address << 32 | written_length) -> ReadbackBuffer
-  std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
-
-  // Dedicated transfer (DMA) queue resources for resolve readback copies, used
-  // only when the device has a transfer-only queue family.
-  std::vector<PendingReadbackCopy> pending_readback_copies_;
-  std::vector<CommandBuffer> transfer_command_buffers_writable_;
-  std::deque<std::pair<uint64_t, CommandBuffer>>
-      transfer_command_buffers_submitted_;
-  std::vector<VkSemaphore> transfer_wait_semaphores_free_;
-  std::deque<std::pair<uint64_t, VkSemaphore>>
-      transfer_wait_semaphores_in_flight_;
-
-  // Simple single buffer for memexport (full mode - always syncs, no
-  // double-buffering)
-  VkBuffer memexport_readback_buffer_ = VK_NULL_HANDLE;
-  VkDeviceMemory memexport_readback_buffer_memory_ = VK_NULL_HANDLE;
-  uint32_t memexport_readback_buffer_size_ = 0;
-
-  // Per-memexport double-buffered readback for fast mode (delayed sync)
-  std::unordered_map<uint64_t, ReadbackBuffer> memexport_readback_buffers_;
+  // Backend-agnostic resolve-to-guest-RAM copy decisions and read-watch
+  // consumption tracking, shared with the D3D12 backend.
+#include "../command_processor_resolve_readwatch.inc"
+  // readback_resolve=uma: last submission that resolved each destination key,
+  // so the direct host read only happens once that submission has retired.
+  std::unordered_map<uint64_t, uint64_t> uma_readback_last_write_;
+  // Per-backend trampoline from the memory read callback into the shared
+  // MarkResolvePagesRead.
+  static void ResolveReadCallbackThunk(void* context, uint32_t physical_address,
+                                       uint32_t length);
 
   // Debug marker support for RenderDoc/debug tools.
   bool debug_markers_enabled_ = false;

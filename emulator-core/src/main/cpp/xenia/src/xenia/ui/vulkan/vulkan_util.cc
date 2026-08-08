@@ -29,35 +29,66 @@ namespace ui {
 namespace vulkan {
 namespace util {
 
+// Builds the atom-aligned range for a non-coherent flush or invalidate.
+// Returns false if nothing is needed (empty range or host-coherent memory).
+static bool GetNonCoherentMappedRange(const VulkanDevice* const vulkan_device,
+                                      const VkDeviceMemory memory,
+                                      const uint32_t memory_type,
+                                      const VkDeviceSize offset,
+                                      const VkDeviceSize memory_size,
+                                      const VkDeviceSize size,
+                                      VkMappedMemoryRange& range_out) {
+  assert_false(size != VK_WHOLE_SIZE && memory_size == VK_WHOLE_SIZE);
+  assert_true(memory_size == VK_WHOLE_SIZE || offset <= memory_size);
+  assert_true(memory_size == VK_WHOLE_SIZE || size <= memory_size - offset);
+  if (!size || (vulkan_device->memory_types().host_coherent &
+                (uint32_t(1) << memory_type))) {
+    return false;
+  }
+  const VkDeviceSize non_coherent_atom_size =
+      vulkan_device->properties().nonCoherentAtomSize;
+  range_out.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+  range_out.pNext = nullptr;
+  range_out.memory = memory;
+  range_out.offset = offset / non_coherent_atom_size * non_coherent_atom_size;
+  range_out.size = size;
+  if (size != VK_WHOLE_SIZE) {
+    range_out.size =
+        std::min(xe::round_up(offset + size, non_coherent_atom_size),
+                 memory_size) -
+        range_out.offset;
+  }
+  return true;
+}
+
 void FlushMappedMemoryRange(const VulkanDevice* const vulkan_device,
                             const VkDeviceMemory memory,
                             const uint32_t memory_type,
                             const VkDeviceSize offset,
                             const VkDeviceSize memory_size,
                             const VkDeviceSize size) {
-  assert_false(size != VK_WHOLE_SIZE && memory_size == VK_WHOLE_SIZE);
-  assert_true(memory_size == VK_WHOLE_SIZE || offset <= memory_size);
-  assert_true(memory_size == VK_WHOLE_SIZE || size <= memory_size - offset);
-  if (!size || (vulkan_device->memory_types().host_coherent &
-                (uint32_t(1) << memory_type))) {
-    return;
-  }
   VkMappedMemoryRange range;
-  range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-  range.pNext = nullptr;
-  range.memory = memory;
-  range.offset = offset;
-  range.size = size;
-  const VkDeviceSize non_coherent_atom_size =
-      vulkan_device->properties().nonCoherentAtomSize;
-  range.offset = offset / non_coherent_atom_size * non_coherent_atom_size;
-  if (size != VK_WHOLE_SIZE) {
-    range.size = std::min(xe::round_up(offset + size, non_coherent_atom_size),
-                          memory_size) -
-                 range.offset;
+  if (!GetNonCoherentMappedRange(vulkan_device, memory, memory_type, offset,
+                                 memory_size, size, range)) {
+    return;
   }
   vulkan_device->functions().vkFlushMappedMemoryRanges(vulkan_device->device(),
                                                        1, &range);
+}
+
+void InvalidateMappedMemoryRange(const VulkanDevice* const vulkan_device,
+                                 const VkDeviceMemory memory,
+                                 const uint32_t memory_type,
+                                 const VkDeviceSize offset,
+                                 const VkDeviceSize memory_size,
+                                 const VkDeviceSize size) {
+  VkMappedMemoryRange range;
+  if (!GetNonCoherentMappedRange(vulkan_device, memory, memory_type, offset,
+                                 memory_size, size, range)) {
+    return;
+  }
+  vulkan_device->functions().vkInvalidateMappedMemoryRanges(
+      vulkan_device->device(), 1, &range);
 }
 
 bool CreateDedicatedAllocationBuffer(

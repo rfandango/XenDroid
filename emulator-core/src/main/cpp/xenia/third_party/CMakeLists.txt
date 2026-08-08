@@ -725,6 +725,27 @@ set(SDL_RENDER OFF CACHE INTERNAL "")
 set(SDL_SENSOR OFF CACHE INTERNAL "")
 set(SDL_HIDAPI_LIBUSB OFF CACHE INTERNAL "")
 
+# We never create an SDL window, so the video backends are dead weight.
+# SDL_VIDEO and SDL_X11 must stay on: system_gnulinux.cc dlopens
+# SDL_ShowSimpleMessageBox(), which dispatches through the video bootstrap list.
+set(SDL_WAYLAND OFF CACHE INTERNAL "")
+set(SDL_KMSDRM OFF CACHE INTERNAL "")
+set(SDL_VULKAN OFF CACHE INTERNAL "")
+set(SDL_OPENGL OFF CACHE INTERNAL "")
+set(SDL_OPENGLES OFF CACHE INTERNAL "")
+
+# Of the X11 extensions only Xdbe and Xrandr are reachable from the messagebox
+# toolkit. The rest guard windowing and input code we never enter.
+set(SDL_X11_XCURSOR OFF CACHE INTERNAL "")
+set(SDL_X11_XFIXES OFF CACHE INTERNAL "")
+set(SDL_X11_XINPUT OFF CACHE INTERNAL "")
+set(SDL_X11_XSCRNSAVER OFF CACHE INTERNAL "")
+set(SDL_X11_XSHAPE OFF CACHE INTERNAL "")
+set(SDL_X11_XSYNC OFF CACHE INTERNAL "")
+set(SDL_X11_XTEST OFF CACHE INTERNAL "")
+set(SDL_FRIBIDI OFF CACHE INTERNAL "")
+set(SDL_LIBTHAI OFF CACHE INTERNAL "")
+
 # SDL3's sdlcommands.cmake uses file(GLOB CONFIGURE_DEPENDS ...) for its
 # source lists. CMake honours that by emitting a "Re-checking globbed
 # directories" probe on every build — slow and pointless for a submodule
@@ -1282,4 +1303,127 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
     # compiled wx libraries to keep inline assert expansions consistent.
     target_compile_definitions(xe-wxWidgets INTERFACE
         $<$<CONFIG:Release>:wxDEBUG_LEVEL=0>)
+endif()
+
+# spirv_to_dxil (Mesa, NIR based SPIR-V to DXIL) is the sole D3D12 guest shader
+# backend. Mesa is meson only, so it is built out of tree by meson and linked
+# statically into the exe (no runtime DLL, matching the rest of xenia).
+# libspirv_to_dxil.a does not bundle its deps, so we link the whole archive set
+# (nir, vtn, compiler, dxil_compiler, util, blake3, zlib). Built once as release
+# to match xenia's /MD CRT in every config. Only the D3D12 backend (Windows)
+# consumes it, so the build is gated on WIN32.
+#
+# The meson setup must run in an MSVC environment so meson detects cl. Verify the
+# archive paths below against the real build output if Mesa is restructured.
+if(WIN32)
+  # Mesa source tree built for spirv_to_dxil. Defaults to the third_party/mesa
+  # submodule (our fork with the barycentric, linking, keep_io_vars and FSI->ROV
+  # changes). Repoint this cache variable to build a different Mesa checkout.
+  get_filename_component(_xe_mesa_default
+      "${CMAKE_SOURCE_DIR}/third_party/mesa" ABSOLUTE)
+  set(XENIA_MESA_SOURCE_DIR "${_xe_mesa_default}" CACHE PATH
+      "Mesa source tree built for spirv_to_dxil")
+  set(_xe_mesa_dir "${XENIA_MESA_SOURCE_DIR}")
+  if(NOT EXISTS "${_xe_mesa_dir}/meson.build")
+    message(FATAL_ERROR
+      "The D3D12 backend requires a Mesa tree at ${_xe_mesa_dir} for "
+      "spirv_to_dxil. Run: git submodule update --init third_party/mesa "
+      "(or set XENIA_MESA_SOURCE_DIR to your Mesa checkout).")
+  endif()
+  find_program(XE_MESON_EXECUTABLE meson)
+  find_program(XE_NINJA_EXECUTABLE ninja)
+  if(NOT XE_MESON_EXECUTABLE OR NOT XE_NINJA_EXECUTABLE)
+    message(FATAL_ERROR
+      "spirv_to_dxil needs meson>=1.4 and ninja on PATH (and the python mako "
+      "module). meson=${XE_MESON_EXECUTABLE} ninja=${XE_NINJA_EXECUTABLE}")
+  endif()
+
+  set(_xe_s2d_build "${CMAKE_BINARY_DIR}/third_party/mesa-build")
+  set(_xe_s2d_main "${_xe_s2d_build}/src/microsoft/spirv_to_dxil/libspirv_to_dxil.a")
+  # Dependency archives, in the layout meson emits under the build tree.
+  set(_xe_s2d_deps
+    "${_xe_s2d_build}/src/microsoft/compiler/libdxil_compiler.a"
+    "${_xe_s2d_build}/src/compiler/spirv/libvtn.a"
+    "${_xe_s2d_build}/src/compiler/nir/libnir.a"
+    "${_xe_s2d_build}/src/compiler/libcompiler.a"
+    "${_xe_s2d_build}/src/util/libmesa_util.a"
+    "${_xe_s2d_build}/src/util/libmesa_util_simd.a"
+    "${_xe_s2d_build}/src/c11/impl/libmesa_util_c11.a"
+    "${_xe_s2d_build}/src/util/blake3/libblake3.a"
+    "${_xe_s2d_build}/subprojects/zlib-1.3.1/libz.a")
+
+  # We only static-link the archives above; spirv_to_dxil is a both_libraries()
+  # target, so a full "meson compile" also links spirv_to_dxil.dll and builds
+  # the spirv2dxil.exe tool, neither of which we consume. Drive ninja against
+  # exactly the archive outputs instead (each pulls in its own objects and
+  # codegen), skipping the dll link and the exe. Ninja matches target names
+  # relative to the build dir, so strip the absolute prefix.
+  set(_xe_s2d_ninja_targets "")
+  foreach(_xe_ar IN LISTS _xe_s2d_main _xe_s2d_deps)
+    file(RELATIVE_PATH _xe_ar_rel "${_xe_s2d_build}" "${_xe_ar}")
+    list(APPEND _xe_s2d_ninja_targets "${_xe_ar_rel}")
+  endforeach()
+
+  # Cross-building for ARM64 from an x64 host: meson defaults to a native
+  # build, compiles its sanity check with the cross cl and cannot run it. A
+  # cross file makes it link-only and skip run-time probes.
+  set(_xe_s2d_cross_args "")
+  if(XE_TARGET_AARCH64 AND NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+    set(_xe_s2d_cross_file "${CMAKE_BINARY_DIR}/third_party/mesa-cross-arm64.txt")
+    file(WRITE "${_xe_s2d_cross_file}"
+"[binaries]
+c = 'cl'
+cpp = 'cl'
+ar = 'lib'
+
+[host_machine]
+system = 'windows'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+")
+    set(_xe_s2d_cross_args --cross-file "${_xe_s2d_cross_file}")
+  endif()
+
+  include(ExternalProject)
+  # Wipe then setup keeps the configure step idempotent across reconfigures.
+  # /wd4189 overrides mesa's /we4189: Release strips asserts, leaving assert-only
+  # locals that would otherwise trip the promoted warning as an error.
+  ExternalProject_Add(mesa_spirv_to_dxil
+    SOURCE_DIR "${_xe_mesa_dir}"
+    CONFIGURE_COMMAND
+      "${CMAKE_COMMAND}" -E rm -rf "${_xe_s2d_build}"
+      COMMAND "${XE_MESON_EXECUTABLE}" setup "${_xe_s2d_build}" "${_xe_mesa_dir}"
+        ${_xe_s2d_cross_args}
+        --default-library=static --buildtype=release -Db_vscrt=md
+        -Dc_args=/wd4189 -Dcpp_args=/wd4189
+        -Dspirv-to-dxil=true
+        -Dgallium-drivers= -Dvulkan-drivers= -Dplatforms=
+        -Dglx=disabled -Degl=disabled -Dgbm=disabled
+        -Dopengl=false -Dgles1=disabled -Dgles2=disabled
+        -Dllvm=disabled -Dvideo-codecs=
+    BUILD_COMMAND "${XE_NINJA_EXECUTABLE}" -C "${_xe_s2d_build}"
+      ${_xe_s2d_ninja_targets}
+    INSTALL_COMMAND ""
+    BUILD_BYPRODUCTS "${_xe_s2d_main}" ${_xe_s2d_deps}
+    # Editable source tree, so re-run ninja every build. It is incremental and
+    # cheap when nothing changed, and picks up local Mesa edits.
+    BUILD_ALWAYS ON
+    USES_TERMINAL_BUILD ON)
+
+  add_library(spirv_to_dxil STATIC IMPORTED GLOBAL)
+  add_dependencies(spirv_to_dxil mesa_spirv_to_dxil)
+  # Built release once. synchronization/version are the only non-default system
+  # libs Mesa needs.
+  set_target_properties(spirv_to_dxil PROPERTIES
+    IMPORTED_LOCATION "${_xe_s2d_main}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${_xe_mesa_dir}/src/microsoft/spirv_to_dxil;${_xe_mesa_dir}/src/microsoft/compiler"
+    INTERFACE_LINK_LIBRARIES "${_xe_s2d_deps};synchronization;version")
+  # Multi-Config evaluates every config, so point each at the same archive.
+  foreach(_xe_cfg IN LISTS CMAKE_CONFIGURATION_TYPES)
+    string(TOUPPER "${_xe_cfg}" _xe_cfg_u)
+    set_target_properties(spirv_to_dxil PROPERTIES
+      IMPORTED_LOCATION_${_xe_cfg_u} "${_xe_s2d_main}")
+  endforeach()
 endif()

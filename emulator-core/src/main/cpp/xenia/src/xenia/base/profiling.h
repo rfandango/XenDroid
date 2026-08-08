@@ -111,6 +111,11 @@ namespace xe {
 // Tracks a GPU value counter.
 #define COUNT_profile_gpu(name, count) MICROPROFILE_META_GPU(name, count)
 
+// Returns a cached CPU token naming a guest function by its address (group
+// "guestfn", name = 8-hex address). Thread-safe. Used to profile guest code by
+// address from the JIT dispatch and function tracers.
+MicroProfileToken GetGuestFunctionToken(uint32_t guest_address);
+
 #else
 
 #define DEFINE_profile_cpu(name, group_name, scope_name)

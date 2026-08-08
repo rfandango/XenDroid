@@ -113,10 +113,6 @@ msgstr "&Visa"
 msgid "&Volume"
 msgstr "&Volym"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(Installerat) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(okänd titel)"
@@ -963,6 +959,14 @@ msgstr "Inga profiler hittades"
 msgid "No file path is set for this title."
 msgstr "Ingen filsökväg är angiven för denna titel."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "Inga spel hittades."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "Inga nya spel hittades."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1316,10 +1320,6 @@ msgstr "Status"
 msgid "Status: %s"
 msgstr "Status: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "Status: Installerat"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "Stoppa den körande titeln och återgå till listan"
@@ -1581,3 +1581,4 @@ msgstr "Direct3D 12-felsökningslager installerat, men automatisk omstart missly
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll hittades inte, krävs för Vulkan-grafikbackenden. Ladda ner nu (~20 MB)?"
+

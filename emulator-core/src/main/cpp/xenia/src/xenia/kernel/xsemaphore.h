@@ -27,7 +27,7 @@ class XSemaphore : public XObject {
 
   [[nodiscard]] bool Initialize(int32_t initial_count, int32_t maximum_count);
   [[nodiscard]] bool InitializeNative(void* native_ptr,
-                                      X_DISPATCH_HEADER* header);
+                                      const X_DISPATCH_HEADER* header);
 
   [[nodiscard]] bool ReleaseSemaphore(int32_t release_count,
                                       int32_t* out_previous_count);
@@ -42,8 +42,15 @@ class XSemaphore : public XObject {
   }
   void WaitCallback() override;
 
+  void CooperativeWaitBegin(XThread* thread) override;
+  void CooperativeWaitEnd(XThread* thread) override;
+  bool CooperativeMayAcquire(XThread* thread) override;
+  XThread* CooperativeWakeTarget() override { return waiters_.Front(); }
+
  private:
   std::unique_ptr<xe::threading::Semaphore> semaphore_;
+  // Fibers waiting cooperatively, in order, for fair permit handout.
+  CooperativeWaiterFifo waiters_;
   uint32_t maximum_count_ = 0;
 };
 

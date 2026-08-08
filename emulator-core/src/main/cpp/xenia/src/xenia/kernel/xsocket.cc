@@ -12,12 +12,16 @@
 #include <cstring>
 #include <thread>
 
+#include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/memory.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/threading.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xevent.h"
+#include "xenia/kernel/xthread.h"
 
 namespace xe {
 namespace kernel {
@@ -340,6 +344,18 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     broadcast_socket_ = true;
   }
 
+  // SO_SNDTIMEO / SO_RCVTIMEO, a big-endian DWORD of milliseconds. Kept for
+  // the cooperative retry loop, which never sees the host option take effect.
+  if (level == 0xFFFF && (optname == 0x1005 || optname == 0x1006) &&
+      optlen >= sizeof(uint32_t)) {
+    uint32_t timeout_ms = xe::load_and_swap<uint32_t>(optval_ptr);
+    if (optname == 0x1006) {
+      recv_timeout_ms_ = timeout_ms;
+    } else {
+      send_timeout_ms_ = timeout_ms;
+    }
+  }
+
   return X_STATUS_SUCCESS;
 }
 
@@ -367,6 +383,7 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
       last_error_ = AsioErrorToWSAError(ec);
       return X_STATUS_UNSUCCESSFUL;
     }
+    guest_non_blocking_ = non_blocking;
     return X_STATUS_SUCCESS;
   }
 
@@ -390,6 +407,68 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 
   XELOGE("XSocket::IOControl: unsupported command {:08X}", cmd);
   return X_STATUS_INVALID_PARAMETER;
+}
+
+void XSocket::SetHostNonBlocking(bool enable) {
+  asio::error_code ec;
+  if (acceptor_) {
+    acceptor_->non_blocking(enable, ec);
+  } else if (tcp_socket_) {
+    tcp_socket_->non_blocking(enable, ec);
+  } else if (udp_socket_) {
+    udp_socket_->non_blocking(enable, ec);
+  }
+}
+
+void XSocket::RunCooperatively(asio::error_code& ec, RetryMode mode,
+                               const std::function<void()>& attempt) {
+  XThread* self =
+      GuestScheduler::enabled() ? XThread::GetCurrentFiberThread() : nullptr;
+  if (!self || guest_non_blocking_) {
+    attempt();
+    return;
+  }
+
+  // Enforced here because the host option only applies in blocking mode.
+  // Connect is left unbounded, Winsock not applying SO_SNDTIMEO to it.
+  uint32_t timeout_ms = 0;
+  if (mode == RetryMode::kReceive) {
+    timeout_ms = recv_timeout_ms_;
+  } else if (mode == RetryMode::kSend) {
+    timeout_ms = send_timeout_ms_;
+  }
+  uint64_t deadline_ms =
+      timeout_ms ? Clock::QueryHostUptimeMillis() + timeout_ms : 0;
+
+  if (cooperative_io_depth_.fetch_add(1) == 0) {
+    SetHostNonBlocking(true);
+  }
+  auto* scheduler = self->kernel_state()->guest_scheduler();
+  while (true) {
+    attempt();
+    bool retry = ec == asio::error::would_block || ec == asio::error::try_again;
+    if (mode == RetryMode::kConnect) {
+      // A retried connect reports success by refusing to connect twice.
+      if (ec == asio::error::already_connected) {
+        ec.clear();
+        break;
+      }
+      retry = retry || ec == asio::error::in_progress ||
+              ec == asio::error::already_started;
+    }
+    if (!retry) {
+      break;
+    }
+    if (deadline_ms && Clock::QueryHostUptimeMillis() >= deadline_ms) {
+      // What a blocking socket reports when its SO_*TIMEO expires.
+      ec = asio::error::timed_out;
+      break;
+    }
+    scheduler->BlockCurrentThread();
+  }
+  if (cooperative_io_depth_.fetch_sub(1) == 1) {
+    SetHostNonBlocking(false);
+  }
 }
 
 X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
@@ -418,10 +497,12 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
     }
 
     asio::ip::tcp::endpoint endpoint(addr, port);
-    tcp_socket_->connect(endpoint, ec);
+    RunCooperatively(ec, RetryMode::kConnect,
+                     [&]() { tcp_socket_->connect(endpoint, ec); });
   } else if (tcp_socket_) {
     asio::ip::tcp::endpoint endpoint(addr, port);
-    tcp_socket_->connect(endpoint, ec);
+    RunCooperatively(ec, RetryMode::kConnect,
+                     [&]() { tcp_socket_->connect(endpoint, ec); });
   } else if (udp_socket_) {
     asio::ip::udp::endpoint endpoint(addr, port);
     udp_socket_->connect(endpoint, ec);
@@ -533,7 +614,8 @@ object_ref<XSocket> XSocket::Accept(N_XSOCKADDR* name, int* name_len) {
   // Accept a new connection
   asio::ip::tcp::socket new_socket(GetIoContext());
   asio::ip::tcp::endpoint peer_endpoint;
-  acceptor_->accept(new_socket, peer_endpoint, ec);
+  RunCooperatively(ec, RetryMode::kReceive,
+                   [&]() { acceptor_->accept(new_socket, peer_endpoint, ec); });
 
   if (ec) {
     last_error_ = AsioErrorToWSAError(ec);
@@ -605,11 +687,15 @@ int XSocket::Recv(uint8_t* buf, uint32_t buf_len, uint32_t flags) {
   size_t bytes_received = 0;
 
   if (udp_socket_) {
-    bytes_received =
-        udp_socket_->receive(asio::buffer(buf, buf_len), flags, ec);
+    RunCooperatively(ec, RetryMode::kReceive, [&]() {
+      bytes_received =
+          udp_socket_->receive(asio::buffer(buf, buf_len), flags, ec);
+    });
   } else if (tcp_socket_) {
-    bytes_received =
-        tcp_socket_->receive(asio::buffer(buf, buf_len), flags, ec);
+    RunCooperatively(ec, RetryMode::kReceive, [&]() {
+      bytes_received =
+          tcp_socket_->receive(asio::buffer(buf, buf_len), flags, ec);
+    });
   }
 
   if (ec) {
@@ -631,8 +717,10 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
 
   if (udp_socket_) {
     asio::ip::udp::endpoint sender_endpoint;
-    bytes_received = udp_socket_->receive_from(asio::buffer(buf, buf_len),
-                                               sender_endpoint, 0, ec);
+    RunCooperatively(ec, RetryMode::kReceive, [&]() {
+      bytes_received = udp_socket_->receive_from(asio::buffer(buf, buf_len),
+                                                 sender_endpoint, 0, ec);
+    });
 
     if (!ec && from) {
       from->sin_family = AF_INET;
@@ -644,8 +732,10 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
       *from_len = sizeof(N_XSOCKADDR_IN);
     }
   } else if (tcp_socket_) {
-    bytes_received =
-        tcp_socket_->receive(asio::buffer(buf, buf_len), flags, ec);
+    RunCooperatively(ec, RetryMode::kReceive, [&]() {
+      bytes_received =
+          tcp_socket_->receive(asio::buffer(buf, buf_len), flags, ec);
+    });
   }
 
   if (ec) {
@@ -665,9 +755,13 @@ int XSocket::Send(const uint8_t* buf, uint32_t buf_len, uint32_t flags) {
   size_t bytes_sent = 0;
 
   if (udp_socket_) {
-    bytes_sent = udp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+    RunCooperatively(ec, RetryMode::kSend, [&]() {
+      bytes_sent = udp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+    });
   } else if (tcp_socket_) {
-    bytes_sent = tcp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+    RunCooperatively(ec, RetryMode::kSend, [&]() {
+      bytes_sent = tcp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+    });
   }
 
   if (ec) {
@@ -693,14 +787,20 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags,
       uint16_t port = to->sin_port;
       asio::ip::udp::endpoint endpoint(addr, port);
 
-      bytes_sent =
-          udp_socket_->send_to(asio::buffer(buf, buf_len), endpoint, flags, ec);
+      RunCooperatively(ec, RetryMode::kSend, [&]() {
+        bytes_sent = udp_socket_->send_to(asio::buffer(buf, buf_len), endpoint,
+                                          flags, ec);
+      });
     } else {
       // Send to connected endpoint
-      bytes_sent = udp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+      RunCooperatively(ec, RetryMode::kSend, [&]() {
+        bytes_sent = udp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+      });
     }
   } else if (tcp_socket_) {
-    bytes_sent = tcp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+    RunCooperatively(ec, RetryMode::kSend, [&]() {
+      bytes_sent = tcp_socket_->send(asio::buffer(buf, buf_len), flags, ec);
+    });
   }
 
   if (ec) {
@@ -739,6 +839,7 @@ int XSocket::WSAEventSelect(object_ref<XEvent> event, uint32_t flags) {
   } else if (udp_socket_) {
     udp_socket_->non_blocking(true, ec);
   }
+  guest_non_blocking_ = true;
 
   std::lock_guard<std::mutex> lock(select_mutex_);
 

@@ -4,7 +4,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: xenia-edge\n"
-"POT-Creation-Date: 2026-06-22 05:34+0000\n"
+"POT-Creation-Date: 2026-07-09 08:49+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -40,7 +40,7 @@ msgstr ""
 msgid "%s (%08X) - Config Overrides"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2289
+#: src/xenia/app/emulator_window.cc:2351
 msgid "%s (Slot %d)"
 msgstr ""
 
@@ -48,68 +48,64 @@ msgstr ""
 msgid "%zu directories scanned   %zu files probed   %zu games found"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1087
+#: src/xenia/app/emulator_window.cc:1145
 msgid "&About..."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:980
+#: src/xenia/app/emulator_window.cc:1038
 msgid "&Add Games..."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1050
+#: src/xenia/app/emulator_window.cc:1108
 msgid "&Audio"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1010
+#: src/xenia/app/emulator_window.cc:1068
 msgid "&Configuration"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1061
+#: src/xenia/app/emulator_window.cc:1119
 msgid "&Controllers"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:972
+#: src/xenia/app/emulator_window.cc:1030
 msgid "&File"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1076
+#: src/xenia/app/emulator_window.cc:1134
 msgid "&Help"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1069
+#: src/xenia/app/emulator_window.cc:1127
 msgid "&Install Content..."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1012
+#: src/xenia/app/emulator_window.cc:1070
 msgid "&Main"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:975
+#: src/xenia/app/emulator_window.cc:1033
 msgid "&Open..."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1002
+#: src/xenia/app/emulator_window.cc:1060
 msgid "&Profile"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:985
+#: src/xenia/app/emulator_window.cc:1043
 msgid "&Stop Game"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1066
+#: src/xenia/app/emulator_window.cc:1124
 msgid "&Tools"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1039
+#: src/xenia/app/emulator_window.cc:1097
 msgid "&View"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1053
+#: src/xenia/app/emulator_window.cc:1111
 msgid "&Volume"
-msgstr ""
-
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
 msgstr ""
 
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
@@ -128,7 +124,7 @@ msgstr ""
 msgid "Achievements"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2769
+#: src/xenia/app/emulator_window.cc:2831
 msgid "Add Games"
 msgstr ""
 
@@ -137,7 +133,7 @@ msgstr ""
 msgid "Add Override"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2770
+#: src/xenia/app/emulator_window.cc:2832
 msgid "Add games"
 msgstr ""
 
@@ -169,11 +165,11 @@ msgstr ""
 msgid "All cvars are already overridden."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:409
+#: src/xenia/app/emulator_window.cc:414
 msgid "Arcade Pad"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:397
+#: src/xenia/app/emulator_window.cc:402
 msgid "Arcade Stick"
 msgstr ""
 
@@ -193,12 +189,16 @@ msgstr ""
 msgid "Austria"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2580
+#: src/xenia/app/emulator_window.cc:2642
 msgid "Auto (%s)"
 msgstr ""
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:71
 msgid "Azerbaijan"
+msgstr ""
+
+#: src/xenia/app/emulator_window.cc:439
+msgid "BSD 3-Clause License"
 msgstr ""
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:74
@@ -219,6 +219,13 @@ msgstr ""
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:76
 msgid "Bolivia"
+msgstr ""
+
+#: src/xenia/app/emulator_window.cc:434
+msgid ""
+"Branch: %s\n"
+"Commit: %s\n"
+"Build Date: %s"
 msgstr ""
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:77
@@ -254,11 +261,11 @@ msgstr ""
 msgid "Cancel"
 msgstr ""
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:421
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:431
 msgid "Cancelled."
 msgstr ""
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:454
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:464
 #: src/xenia/ui/install_progress_dialog_wx.cc:244
 msgid "Cancelling..."
 msgstr ""
@@ -328,19 +335,19 @@ msgstr ""
 msgid "Country:"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2367
+#: src/xenia/app/emulator_window.cc:2429
 msgid "Create new..."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2371
-#: src/xenia/app/emulator_window.cc:2383
-#: src/xenia/app/emulator_window.cc:2726
-#: src/xenia/app/emulator_window.cc:2733
-#: src/xenia/app/emulator_window.cc:2745
+#: src/xenia/app/emulator_window.cc:2433
+#: src/xenia/app/emulator_window.cc:2445
+#: src/xenia/app/emulator_window.cc:2788
+#: src/xenia/app/emulator_window.cc:2795
+#: src/xenia/app/emulator_window.cc:2807
 msgid "Create profile"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2725
+#: src/xenia/app/emulator_window.cc:2787
 msgid "Create profile && migrate data"
 msgstr ""
 
@@ -352,11 +359,11 @@ msgstr ""
 msgid "Czech Republic"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:654
+#: src/xenia/ui/redist_installer_wx.cc:655
 msgid "D3D12Core.dll not found, required for Shader Model 6.6. Download now (~35 MB) and restart?"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:701
+#: src/xenia/ui/redist_installer_wx.cc:702
 msgid "D3D12SDKLayers.dll not found, required for the Direct3D 12 debug layer. Download now (~35 MB) and restart?"
 msgstr ""
 
@@ -364,7 +371,7 @@ msgstr ""
 msgid "DLC"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:401
+#: src/xenia/app/emulator_window.cc:406
 msgid "Dance Pad"
 msgstr ""
 
@@ -392,7 +399,7 @@ msgstr ""
 msgid "Discard all unsaved changes?"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2554
+#: src/xenia/app/emulator_window.cc:2616
 msgid "Disconnect"
 msgstr ""
 
@@ -404,16 +411,16 @@ msgstr ""
 msgid "Dominican Republic"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:574
-#: src/xenia/ui/redist_installer_wx.cc:806
+#: src/xenia/ui/redist_installer_wx.cc:575
+#: src/xenia/ui/redist_installer_wx.cc:807
 msgid "Download failed. Check your internet connection and try again."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:407
+#: src/xenia/app/emulator_window.cc:412
 msgid "Drum Kit"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:995
+#: src/xenia/app/emulator_window.cc:1053
 msgid "E&xit"
 msgstr ""
 
@@ -429,7 +436,7 @@ msgstr ""
 msgid "Edit Discs..."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2347
+#: src/xenia/app/emulator_window.cc:2409
 msgid "Edit..."
 msgstr ""
 
@@ -453,8 +460,8 @@ msgstr ""
 msgid "English"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2370
-#: src/xenia/app/emulator_window.cc:2732
+#: src/xenia/app/emulator_window.cc:2432
+#: src/xenia/app/emulator_window.cc:2794
 msgid "Enter gamertag for new profile:"
 msgstr ""
 
@@ -470,29 +477,19 @@ msgstr ""
 msgid "Estonia"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2945
-msgid ""
-"Experimental fork of Xenia Canary.\n"
-"\n"
-"https://github.com/has207/xenia-edge\n"
-"\n"
-"Branch: %s\n"
-"Commit: %s\n"
-"Build Date: %s\n"
-"\n"
-"UI font: Inter by Rasmus Andersson (https://rsms.me/inter/, SIL Open Font License 1.1).\n"
-"Icons by Icons8 (https://icons8.com)."
+#: src/xenia/app/emulator_window.cc:3006
+msgid "Experimental fork of Xenia Canary."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1079
+#: src/xenia/app/emulator_window.cc:1137
 msgid "FA&Q..."
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:585
-#: src/xenia/ui/redist_installer_wx.cc:813
-#: src/xenia/ui/redist_installer_wx.cc:819
-#: src/xenia/ui/redist_installer_wx.cc:849
-#: src/xenia/ui/redist_installer_wx.cc:863
+#: src/xenia/ui/redist_installer_wx.cc:586
+#: src/xenia/ui/redist_installer_wx.cc:814
+#: src/xenia/ui/redist_installer_wx.cc:820
+#: src/xenia/ui/redist_installer_wx.cc:850
+#: src/xenia/ui/redist_installer_wx.cc:864
 msgid "Failed to install the downloaded files."
 msgstr ""
 
@@ -531,7 +528,7 @@ msgstr ""
 msgid "Finland"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:399
+#: src/xenia/app/emulator_window.cc:404
 msgid "Flight Stick"
 msgstr ""
 
@@ -555,7 +552,7 @@ msgstr ""
 msgid "Full Screen:"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1083
+#: src/xenia/app/emulator_window.cc:1141
 msgid "Game &compatibility..."
 msgstr ""
 
@@ -563,8 +560,8 @@ msgstr ""
 msgid "GameMode not in PATH; install to enable."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:393
-#: src/xenia/app/emulator_window.cc:411
+#: src/xenia/app/emulator_window.cc:398
+#: src/xenia/app/emulator_window.cc:416
 msgid "Gamepad"
 msgstr ""
 
@@ -640,11 +637,11 @@ msgstr ""
 msgid "Guatemala"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2016
+#: src/xenia/app/emulator_window.cc:2078
 msgid "Guide"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:405
+#: src/xenia/app/emulator_window.cc:410
 msgid "Guitar"
 msgstr ""
 
@@ -672,15 +669,23 @@ msgstr ""
 msgid "Icon change is disabled while a title is running."
 msgstr ""
 
+#: src/xenia/app/emulator_window.cc:444
+msgid "Icons by %s"
+msgstr ""
+
+#: src/xenia/app/emulator_window.cc:444
+msgid "Icons8"
+msgstr ""
+
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:198
 msgid "Import"
 msgstr ""
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:431
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:441
 msgid "Import %zu New Items"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1847
+#: src/xenia/app/emulator_window.cc:1905
 msgid "Import failed"
 msgstr ""
 
@@ -704,16 +709,20 @@ msgstr ""
 msgid "Installation Progress"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:719
+#: src/xenia/ui/redist_installer_wx.cc:720
 msgid "Installed the Direct3D 12 debug layer, but couldn't restart automatically. Please restart Xenia."
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:672
+#: src/xenia/ui/redist_installer_wx.cc:673
 msgid "Installed the DirectX 12 Agility SDK runtime, but couldn't restart automatically. Please restart Xenia."
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:871
+#: src/xenia/ui/redist_installer_wx.cc:872
 msgid "Installed the Microsoft Visual C++ runtime, but couldn't restart automatically. Please restart Xenia."
+msgstr ""
+
+#: src/xenia/app/emulator_window.cc:443
+msgid "Inter by Rasmus Andersson"
 msgstr ""
 
 #: src/xenia/ui/game_list_panel_wx.cc:771
@@ -729,8 +738,8 @@ msgstr ""
 msgid "Invalid gamertag"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2383
-#: src/xenia/app/emulator_window.cc:2745
+#: src/xenia/app/emulator_window.cc:2445
+#: src/xenia/app/emulator_window.cc:2807
 msgid "Invalid gamertag."
 msgstr ""
 
@@ -870,11 +879,11 @@ msgstr ""
 msgid "Loads"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2297
+#: src/xenia/app/emulator_window.cc:2359
 msgid "Login"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2325
+#: src/xenia/app/emulator_window.cc:2387
 msgid "Logout"
 msgstr ""
 
@@ -930,8 +939,8 @@ msgstr ""
 msgid "Morocco"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1180
-#: src/xenia/app/emulator_window.cc:2857
+#: src/xenia/app/emulator_window.cc:1238
+#: src/xenia/app/emulator_window.cc:2919
 msgid "Mute"
 msgstr ""
 
@@ -955,12 +964,20 @@ msgstr ""
 msgid "Nicaragua"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2723
+#: src/xenia/app/emulator_window.cc:2785
 msgid "No Profiles Found"
 msgstr ""
 
 #: src/xenia/ui/game_list_panel_wx.cc:603
 msgid "No file path is set for this title."
+msgstr ""
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr ""
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
 msgstr ""
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:177
@@ -979,13 +996,13 @@ msgid ""
 "played"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1249
-#: src/xenia/app/emulator_window.cc:2694
+#: src/xenia/app/emulator_window.cc:1307
+#: src/xenia/app/emulator_window.cc:2756
 msgid "Not logged in"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2727
-#: src/xenia/app/emulator_window.cc:2770
+#: src/xenia/app/emulator_window.cc:2789
+#: src/xenia/app/emulator_window.cc:2832
 msgid "Not now"
 msgstr ""
 
@@ -1009,12 +1026,12 @@ msgstr ""
 msgid "Online XUID:"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1142
+#: src/xenia/app/emulator_window.cc:1200
 msgid "Open"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1143
-#: src/xenia/app/emulator_window.cc:2010
+#: src/xenia/app/emulator_window.cc:1201
+#: src/xenia/app/emulator_window.cc:2072
 msgid "Open a title"
 msgstr ""
 
@@ -1096,8 +1113,8 @@ msgstr ""
 msgid "Pro"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1252
-#: src/xenia/app/emulator_window.cc:1253
+#: src/xenia/app/emulator_window.cc:1310
+#: src/xenia/app/emulator_window.cc:1311
 msgid "Profile"
 msgstr ""
 
@@ -1262,17 +1279,17 @@ msgstr ""
 msgid "Selected file is not a valid PNG image."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1147
-#: src/xenia/app/emulator_window.cc:1148
-#: src/xenia/app/emulator_window.cc:2016
+#: src/xenia/app/emulator_window.cc:1205
+#: src/xenia/app/emulator_window.cc:1206
+#: src/xenia/app/emulator_window.cc:2078
 msgid "Settings"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1042
+#: src/xenia/app/emulator_window.cc:1100
 msgid "Show &Toolbar"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:991
+#: src/xenia/app/emulator_window.cc:1049
 msgid "Show content directory..."
 msgstr ""
 
@@ -1288,9 +1305,9 @@ msgstr ""
 msgid "Singapore"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2301
-#: src/xenia/app/emulator_window.cc:2499
-#: src/xenia/app/emulator_window.cc:2543
+#: src/xenia/app/emulator_window.cc:2363
+#: src/xenia/app/emulator_window.cc:2561
+#: src/xenia/app/emulator_window.cc:2605
 msgid "Slot %d"
 msgstr ""
 
@@ -1322,11 +1339,7 @@ msgstr ""
 msgid "Status: %s"
 msgstr ""
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr ""
-
-#: src/xenia/app/emulator_window.cc:2007
+#: src/xenia/app/emulator_window.cc:2069
 msgid "Stop the running title and return to the list"
 msgstr ""
 
@@ -1362,20 +1375,20 @@ msgstr ""
 msgid "Thailand"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:793
+#: src/xenia/ui/redist_installer_wx.cc:794
 msgid "The Microsoft Visual C++ runtime (%u.%u or newer) isn't installed. Download it from Microsoft now (~25 MB) and install?"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:580
-#: src/xenia/ui/redist_installer_wx.cc:827
+#: src/xenia/ui/redist_installer_wx.cc:581
+#: src/xenia/ui/redist_installer_wx.cc:828
 msgid "The downloaded file failed integrity verification and was discarded."
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:785
+#: src/xenia/ui/redist_installer_wx.cc:786
 msgid "The installed Microsoft Visual C++ runtime %u.%u.%u is older than the %u.%u this build of Xenia requires. Download the latest from Microsoft now (~25 MB) and install?"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2721
+#: src/xenia/app/emulator_window.cc:2783
 msgid ""
 "There is no profile available. You will not be able to save without one.\n"
 "\n"
@@ -1414,9 +1427,13 @@ msgstr ""
 msgid "Turkey"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2575
+#: src/xenia/app/emulator_window.cc:2637
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:89
 msgid "Type: %s"
+msgstr ""
+
+#: src/xenia/app/emulator_window.cc:442
+msgid "UI font: %s (SIL Open Font License 1.1)"
 msgstr ""
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:166
@@ -1443,7 +1460,7 @@ msgstr ""
 msgid "Unknown"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2856
+#: src/xenia/app/emulator_window.cc:2918
 msgid "Unmute"
 msgstr ""
 
@@ -1492,22 +1509,26 @@ msgstr ""
 msgid "Viet Nam"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1190
+#: src/xenia/app/emulator_window.cc:1248
 msgid "Volume"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:395
+#: src/xenia/app/emulator_window.cc:400
 msgid "Wheel"
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:2767
+#: src/xenia/app/emulator_window.cc:2829
 msgid ""
 "Would you like to add games now?\n"
 "\n"
 "You can also do this later from File -> Add games."
 msgstr ""
 
-#: src/xenia/app/emulator_window.cc:1845
+#: src/xenia/app/emulator_window.cc:438
+msgid "Xenia is distributed under the %s"
+msgstr ""
+
+#: src/xenia/app/emulator_window.cc:1903
 msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
 msgstr ""
 
@@ -1531,7 +1552,7 @@ msgstr ""
 msgid "by %s"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:612
+#: src/xenia/ui/redist_installer_wx.cc:613
 msgid "dxcompiler.dll and dxil.dll not found, required for Direct3D 12 shaders. Download now (~26 MB)?"
 msgstr ""
 
@@ -1543,7 +1564,7 @@ msgstr ""
 msgid "title %08X"
 msgstr ""
 
-#: src/xenia/ui/redist_installer_wx.cc:746
+#: src/xenia/ui/redist_installer_wx.cc:747
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr ""
 

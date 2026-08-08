@@ -630,11 +630,6 @@ bool EmulatorApp::OnInitialize() {
   }
 #endif
 
-  if (cvars::discord) {
-    discord::DiscordPresence::Initialize();
-    discord::DiscordPresence::NotPlaying();
-  }
-
   auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
   emulator_window_ = EmulatorWindow::Create(emulator_.get(), app_context(),
                                             res.first, res.second);
@@ -723,6 +718,7 @@ void EmulatorApp::EmulatorThread() {
 
   emulator_->on_launch.AddListener([&](auto title_id, const auto& game_title) {
     if (cvars::discord) {
+      discord::DiscordPresence::Initialize();
       discord::DiscordPresence::PlayingTitle(
           game_title.empty() ? "Unknown Title" : std::string(game_title));
     }
@@ -749,12 +745,6 @@ void EmulatorApp::EmulatorThread() {
 
   emulator_->on_patch_apply.AddListener([this]() {
     app_context().CallInUIThread([this]() { emulator_window_->UpdateTitle(); });
-  });
-
-  emulator_->on_terminate.AddListener([]() {
-    if (cvars::discord) {
-      discord::DiscordPresence::NotPlaying();
-    }
   });
 
   emulator_->on_before_shutdown.AddListener([this]() {

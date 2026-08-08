@@ -20,6 +20,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/platform.h"
+#include "xenia/base/threading.h"
 
 namespace xe {
 
@@ -39,6 +40,19 @@ std::pair<ExceptionHandler::Handler, void*> handlers_[kMaxHandlerCount];
 
 static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                      void* signal_context) {
+  if (signal_number == SIGSEGV &&
+      xe::threading::Fiber::IsStackOverflowFault(signal_info->si_addr)) {
+    // Crash-safe diagnostic, the process is going down on the default action.
+    char buf[96];
+    int n =
+        std::snprintf(buf, sizeof(buf), "Fiber stack overflow: fault at %p\n",
+                      signal_info->si_addr);
+    if (n > 0) {
+      (void)::write(STDERR_FILENO, buf, static_cast<size_t>(n));
+    }
+    XELOGE("Fiber stack overflow: fault at {:X}",
+           reinterpret_cast<uintptr_t>(signal_info->si_addr));
+  }
 #if XE_PLATFORM_MAC && XE_ARCH_ARM64
   // The Darwin kernel may pass an unaligned ucontext_t pointer to signal
   // handlers; copy into an aligned local before reading. mcontext_t is a
@@ -437,7 +451,14 @@ void ExceptionHandler::Install(Handler fn, void* data) {
 
     std::memset(&signal_handler, 0, sizeof(signal_handler));
     signal_handler.sa_sigaction = ExceptionHandlerCallback;
-    signal_handler.sa_flags = SA_SIGINFO;
+    // SA_ONSTACK: an exhausted fiber stack cannot host the handler frame, run
+    // on the per-thread sigaltstack instead.
+    // SA_NODEFER: the handler faults on guest memory it protects itself, and a
+    // nested fault is undeliverable while the kernel blocks the signal - it
+    // retries forever on macOS, kills the process on Linux. Re-entry is safe:
+    // the handler only touches the context it is given, and the global critical
+    // region is recursive.
+    signal_handler.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
 
     if (sigaction(SIGILL, &signal_handler, &original_sigill_handler_) != 0) {
       assert_always("Failed to install new SIGILL handler");

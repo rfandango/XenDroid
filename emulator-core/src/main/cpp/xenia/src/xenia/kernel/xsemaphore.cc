@@ -11,6 +11,7 @@
 
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/logging.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/memory.h"
 
@@ -28,7 +29,7 @@ bool XSemaphore::Initialize(int32_t initial_count, int32_t maximum_count) {
   CreateNative(sizeof(X_KSEMAPHORE));
   auto* ksem = memory()->TranslateVirtual<X_KSEMAPHORE*>(guest_object());
   // Don't touch header.wait_list: SetNativePointer stashes the handle there.
-  ksem->header.type = 5;  // DISPATCHER_SEMAPHORE
+  ksem->header.type = X_DISPATCHER_FLAGS::DISPATCHER_SEMAPHORE;
   ksem->header.signal_state = initial_count;
   ksem->limit = maximum_count;
 
@@ -37,7 +38,8 @@ bool XSemaphore::Initialize(int32_t initial_count, int32_t maximum_count) {
   return !!semaphore_;
 }
 
-bool XSemaphore::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
+bool XSemaphore::InitializeNative(void* native_ptr,
+                                  const X_DISPATCH_HEADER* header) {
   assert_false(semaphore_);
 
   auto semaphore = reinterpret_cast<X_KSEMAPHORE*>(native_ptr);
@@ -62,8 +64,22 @@ bool XSemaphore::ReleaseSemaphore(int32_t release_count,
     memory()
         ->TranslateVirtual<X_KSEMAPHORE*>(guest_object())
         ->header.signal_state = previous_count + release_count;
+    WakeCooperativeWaiters();
   }
   return success;
+}
+
+void XSemaphore::CooperativeWaitBegin(XThread* thread) { waiters_.Add(thread); }
+
+void XSemaphore::CooperativeWaitEnd(XThread* thread) {
+  // Poke the new front so it re-polls now.
+  if (waiters_.Remove(thread)) {
+    WakeCooperativeWaiters();
+  }
+}
+
+bool XSemaphore::CooperativeMayAcquire(XThread* thread) {
+  return waiters_.MayAcquire(thread);
 }
 
 void XSemaphore::WaitCallback() {

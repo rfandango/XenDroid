@@ -458,7 +458,7 @@ void GameListPanel::Reload() {
     Entry e;
     e.title_id = g.title_id;
     e.title_name = g.name;
-    e.path = g.default_path().path;
+    e.path = g.paths.empty() ? std::filesystem::path{} : g.default_path().path;
     e.discs.reserve(g.paths.size());
     for (const auto& p : g.paths) {
       e.discs.push_back(Disc{p.path, p.label});
@@ -590,7 +590,8 @@ void GameListPanel::OnSearch(wxCommandEvent&) {
   Repopulate();
 }
 
-void GameListPanel::LaunchOrPrompt(const std::filesystem::path& path) {
+void GameListPanel::LaunchOrPrompt(uint32_t title_id,
+                                   const std::filesystem::path& path) {
   if (!launch_cb_) {
     return;
   }
@@ -622,6 +623,12 @@ void GameListPanel::LaunchOrPrompt(const std::filesystem::path& path) {
                      "All Files (*.*)|*.*"),
                    wxFD_OPEN | wxFD_FILE_MUST_EXIST);
   if (dlg.ShowModal() == wxID_OK) {
+    // Replacement chosen, drop the stale path.
+    if (emulator_window_) {
+      if (auto* library = emulator_window_->game_library()) {
+        library->RemovePath(title_id, path);
+      }
+    }
     launch_cb_(std::filesystem::path(dlg.GetPath().utf8_string()));
   }
 }
@@ -648,7 +655,8 @@ void GameListPanel::ShowEditDiscsDialog(size_t entry_index) {
       return;
     }
     entries_[entry_index].title_name = le->name;
-    entries_[entry_index].path = le->default_path().path;
+    entries_[entry_index].path =
+        le->paths.empty() ? std::filesystem::path{} : le->default_path().path;
     entries_[entry_index].discs.clear();
     for (const auto& p : le->paths) {
       entries_[entry_index].discs.push_back(Disc{p.path, p.label});
@@ -844,7 +852,7 @@ void GameListPanel::OnItemActivated(wxDataViewEvent& event) {
   if (idx >= entries_.size()) {
     return;
   }
-  LaunchOrPrompt(entries_[idx].path);
+  LaunchOrPrompt(entries_[idx].title_id, entries_[idx].path);
 }
 
 void GameListPanel::OnSelectionChanged(wxDataViewEvent&) {
@@ -939,7 +947,8 @@ void GameListPanel::OnItemContextMenu(wxDataViewEvent& event) {
         auto* item = launch_submenu->Append(wxID_ANY, label);
         menu.Bind(
             wxEVT_MENU,
-            [this, path = disc.path](wxCommandEvent&) { LaunchOrPrompt(path); },
+            [this, title_id = entry.title_id, path = disc.path](
+                wxCommandEvent&) { LaunchOrPrompt(title_id, path); },
             item->GetId());
         ++disc_num;
       }
@@ -953,7 +962,8 @@ void GameListPanel::OnItemContextMenu(wxDataViewEvent& event) {
       auto* launch = menu.Append(wxID_ANY, _("Launch"));
       menu.Bind(
           wxEVT_MENU,
-          [this, path = entry.path](wxCommandEvent&) { LaunchOrPrompt(path); },
+          [this, title_id = entry.title_id, path = entry.path](
+              wxCommandEvent&) { LaunchOrPrompt(title_id, path); },
           launch->GetId());
     }
     auto* open_folder = menu.Append(wxID_ANY, _("Open containing folder"));
@@ -1052,16 +1062,21 @@ void GameListPanel::OnItemContextMenu(wxDataViewEvent& event) {
     auto* compat = new wxMenu;
     auto* canary = compat->Append(wxID_ANY, _("Canary"));
     auto* master = compat->Append(wxID_ANY, _("Master"));
-    // Search every title id the game is known by, so a release tracked under a
-    // sibling id is still found.
+    // Use the issue URL from the compat database when available; fall back to
+    // a GitHub issue-search query for titles not yet tracked.
+    std::string compat_url = GetCompatUrl(entry.title_id);
     std::string compat_query = CompatSearchQuery(entry.title_id);
     menu.Bind(
         wxEVT_MENU,
-        [compat_query](wxCommandEvent&) {
-          xe::LaunchWebBrowser(fmt::format(
-              "https://github.com/xenia-canary/game-compatibility/issues"
-              "?q=is%3Aissue+is%3Aopen+{}",
-              compat_query));
+        [compat_url, compat_query](wxCommandEvent&) {
+          if (!compat_url.empty()) {
+            xe::LaunchWebBrowser(compat_url);
+          } else {
+            xe::LaunchWebBrowser(fmt::format(
+                "https://github.com/xenia-canary/game-compatibility/issues"
+                "?q=is%3Aissue+is%3Aopen+{}",
+                compat_query));
+          }
         },
         canary->GetId());
     menu.Bind(
@@ -1117,19 +1132,24 @@ void GameListPanel::OnItemContextMenu(wxDataViewEvent& event) {
   PopupMenu(&menu, pos);
 }
 
-std::filesystem::path GameListPanel::GetSelectedPath() const {
+const GameListPanel::Entry* GameListPanel::SelectedEntry() const {
   if (!list_) {
-    return {};
+    return nullptr;
   }
   int row = list_->GetSelectedRow();
   if (row < 0 || row >= static_cast<int>(visible_indices_.size())) {
-    return {};
+    return nullptr;
   }
   size_t idx = visible_indices_[row];
   if (idx >= entries_.size()) {
-    return {};
+    return nullptr;
   }
-  return entries_[idx].path;
+  return &entries_[idx];
+}
+
+std::filesystem::path GameListPanel::GetSelectedPath() const {
+  const Entry* e = SelectedEntry();
+  return e ? e->path : std::filesystem::path{};
 }
 
 void GameListPanel::MoveSelection(int delta) {
@@ -1152,9 +1172,9 @@ void GameListPanel::MoveSelection(int delta) {
 }
 
 void GameListPanel::ActivateSelected() {
-  auto path = GetSelectedPath();
-  if (!path.empty()) {
-    LaunchOrPrompt(path);
+  const Entry* e = SelectedEntry();
+  if (e && !e->path.empty()) {
+    LaunchOrPrompt(e->title_id, e->path);
   }
 }
 

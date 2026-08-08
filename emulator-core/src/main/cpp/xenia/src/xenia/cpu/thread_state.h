@@ -10,7 +10,9 @@
 #ifndef XENIA_CPU_THREAD_STATE_H_
 #define XENIA_CPU_THREAD_STATE_H_
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/cpu/thread_state.h"
@@ -20,6 +22,20 @@ namespace xe {
 namespace cpu {
 
 class Processor;
+
+// Per-guest-thread FTRACE bookkeeping. Owned here rather than thread_local so
+// the frame stack follows the thread across dispatch CPUs under the guest
+// scheduler.
+struct FunctionTraceFrame {
+  uint32_t address;
+  uint64_t token;  // MicroProfileToken
+  uint64_t tick;
+  bool profiled;
+};
+struct FunctionTraceState {
+  std::vector<FunctionTraceFrame> stack;
+  uint32_t open_count = 0;
+};
 
 class ThreadState {
  public:
@@ -37,6 +53,8 @@ class ThreadState {
   static ThreadState* Get();
   static uint32_t GetThreadID();
 
+  FunctionTraceState& function_trace_state() { return function_trace_state_; }
+
  private:
   Processor* processor_;
   Memory* memory_;
@@ -44,6 +62,8 @@ class ThreadState {
 
   uint32_t pcr_address_ = 0;
   uint32_t thread_id_ = 0;
+
+  FunctionTraceState function_trace_state_;
 
   // NOTE: must be 64b aligned for SSE ops.
   ppc::PPCContext* context_;

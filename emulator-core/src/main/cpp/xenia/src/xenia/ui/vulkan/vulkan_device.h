@@ -185,6 +185,11 @@ class VulkanDevice {
 
     bool nonSeamlessCubeMap = false;
 
+    // VK_EXT_custom_border_color (#288)
+
+    bool customBorderColors = false;
+    bool customBorderColorWithoutFormat = false;
+
     // VK_KHR_fragment_shader_barycentric (#322)
 
     bool fragmentShaderBarycentric = false;
@@ -221,6 +226,10 @@ class VulkanDevice {
     // within the class the pipeline was created with, so the class is kept in
     // the pipeline key.
     bool extendedDynamicState3PrimitiveTopologyUnrestricted = false;
+
+    // VK_EXT_external_memory_host (#179). Alignment a host pointer must satisfy
+    // to be imported. 0 if the extension is not enabled.
+    VkDeviceSize minImportedHostPointerAlignment = 0;
   };
 
   // Properties of the core API and enabled extensions, and enabled features.
@@ -267,9 +276,19 @@ class VulkanDevice {
     // collapsing pipeline-state-object key permutations. EDS1/EDS2 are core in
     // Vulkan 1.3 and tracked via Properties::extendedDynamicState instead.
     bool ext_EXT_extended_dynamic_state3 = false;
+
+    // VK_EXT_external_memory_host (#179). Imports guest RAM as device memory so
+    // the shared-memory buffer can alias guest RAM directly (zero-copy).
+    bool ext_EXT_external_memory_host = false;
   };
 
   const Extensions& extensions() const { return extensions_; }
+
+  // VK_EXT_external_memory_host entry point, or null if not enabled.
+  PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT()
+      const {
+    return vkGetMemoryHostPointerPropertiesEXT_;
+  }
 
   VkDevice device() const { return device_; }
 
@@ -435,6 +454,10 @@ class VulkanDevice {
   // VK_EXT_device_fault function pointer, loaded only if the extension is
   // enabled. Null otherwise.
   PFN_vkGetDeviceFaultInfoEXT vkGetDeviceFaultInfoEXT_ = nullptr;
+  // VK_EXT_external_memory_host function pointer, loaded only if the extension
+  // is enabled. Null otherwise.
+  PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT_ =
+      nullptr;
   // Set when LogFaultInfo() has already logged - prevents repeat logging from
   // multiple device-loss observers.
   std::atomic_flag fault_info_logged_ = ATOMIC_FLAG_INIT;

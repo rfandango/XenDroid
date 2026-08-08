@@ -115,10 +115,6 @@ msgstr "&Ver"
 msgid "&Volume"
 msgstr "&Volumen"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(Instalado) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(título desconocido)"
@@ -966,6 +962,14 @@ msgstr "No se encontraron perfiles"
 msgid "No file path is set for this title."
 msgstr "No se ha establecido una ruta de archivo para este título."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "No se encontraron juegos."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "No se encontraron juegos nuevos."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1320,10 +1324,6 @@ msgstr "Estado"
 msgid "Status: %s"
 msgstr "Estado: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "Estado: Instalado"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "Detener el título en ejecución y volver a la lista"
@@ -1588,3 +1588,4 @@ msgstr "Se instaló la capa de depuración de Direct3D 12, pero no se pudo reini
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "No se encontró vulkan-1.dll, necesario para el backend gráfico de Vulkan. ¿Descargar ahora (~20 MB)?"
+

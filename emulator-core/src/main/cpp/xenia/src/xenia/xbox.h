@@ -39,6 +39,7 @@ typedef uint32_t X_STATUS;
 #define X_STATUS_TIMEOUT                                ((X_STATUS)0x00000102L)
 #define X_STATUS_PENDING                                ((X_STATUS)0x00000103L)
 #define X_STATUS_OBJECT_NAME_EXISTS                     ((X_STATUS)0x40000000L)
+#define X_STATUS_NO_YIELD_PERFORMED                     ((X_STATUS)0x40000024L)
 #define X_STATUS_TIMER_RESUME_IGNORED                   ((X_STATUS)0x40000025L)
 #define X_STATUS_BUFFER_OVERFLOW                        ((X_STATUS)0x80000005L)
 #define X_STATUS_NO_MORE_FILES                          ((X_STATUS)0x80000006L)

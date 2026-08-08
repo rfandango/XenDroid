@@ -30,6 +30,7 @@
 #include <cstring>
 #include <ctime>
 #include <limits>
+#include <memory>
 
 #if defined(__GLIBCXX__)
 #include <cxxabi.h>
@@ -435,6 +436,7 @@ class PosixConditionBase {
     if (predicate()) {
       executed = true;
     } else {
+      ScopedParked parked(*this);
       if (timeout == std::chrono::milliseconds::max()) {
         cond_.wait(lock, predicate);
         executed = true;  // Did not time out;
@@ -463,7 +465,13 @@ class PosixConditionBase {
   // multi-waits on wakes every parked thread to re-check handles it does not
   // care about.
   void NotifyAll() {
-    cond_.notify_all();
+    // bionic's pthread_cond_broadcast issues the futex syscall even with no
+    // sleeper. Under the cooperative scheduler guest waits are fibers, so
+    // nearly every signal is uncontended and paid a syscall for nothing.
+    // parked_waiters_ is only touched under mutex_, held by every caller.
+    if (parked_waiters_ != 0) {
+      cond_.notify_all();
+    }
     if (multi_wait_refs_.load(std::memory_order_acquire) != 0) {
       PokeMultiWaiters();
     }
@@ -649,6 +657,18 @@ class PosixConditionBase {
  protected:
   [[nodiscard]] inline virtual bool signaled() const = 0;
   inline virtual void post_execution() = 0;
+  // Threads currently inside a cond_ wait on this object. Guarded by mutex_
+  // (the wait sites hold it on both sides of the park, so the counter is
+  // exact whenever NotifyAll reads it).
+  uint32_t parked_waiters_ = 0;
+  // Scopes a cond_ wait for the parked-waiter count.
+  struct ScopedParked {
+    explicit ScopedParked(PosixConditionBase& c) : c_(c) {
+      ++c_.parked_waiters_;
+    }
+    ~ScopedParked() { --c_.parked_waiters_; }
+    PosixConditionBase& c_;
+  };
   std::condition_variable cond_;
   std::mutex mutex_;
 };
@@ -750,11 +770,14 @@ class PosixCondition<Event> : public PosixConditionBase {
       bool executed;
       if (predicate()) {
         executed = true;
-      } else if (timeout == std::chrono::milliseconds::max()) {
-        cond_.wait(lock, predicate);
-        executed = true;
       } else {
-        executed = cond_.wait_for(lock, timeout, predicate);
+        ScopedParked parked(*this);
+        if (timeout == std::chrono::milliseconds::max()) {
+          cond_.wait(lock, predicate);
+          executed = true;
+        } else {
+          executed = cond_.wait_for(lock, timeout, predicate);
+        }
       }
       if (executed) {
         if (!manual_reset_) {
@@ -779,11 +802,14 @@ class PosixCondition<Event> : public PosixConditionBase {
       return node.released || (signal_ && head_ == &node);
     };
     bool executed;
-    if (timeout == std::chrono::milliseconds::max()) {
-      cond_.wait(lock, predicate);
-      executed = true;
-    } else {
-      executed = cond_.wait_for(lock, timeout, predicate);
+    {
+      ScopedParked parked(*this);
+      if (timeout == std::chrono::milliseconds::max()) {
+        cond_.wait(lock, predicate);
+        executed = true;
+      } else {
+        executed = cond_.wait_for(lock, timeout, predicate);
+      }
     }
 
     if (node.released) {
@@ -905,6 +931,7 @@ class PosixCondition<Semaphore> final : public PosixConditionBase {
       // Sliced for diagnostics: a single waiter parked >10s on a semaphore
       // logs itself (these are host-only objects; guest-visible semaphores
       // report through XObject::Wait instead).
+      ScopedParked parked(*this);
       uint32_t slices = 0;
       while (!cond_.wait_for(lock, std::chrono::seconds(10), predicate)) {
         ++slices;
@@ -916,6 +943,7 @@ class PosixCondition<Semaphore> final : public PosixConditionBase {
       }
       executed = true;
     } else {
+      ScopedParked parked(*this);
       executed = cond_.wait_for(lock, timeout, predicate);
     }
     if (executed) {
@@ -1981,6 +2009,15 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   auto start_data = static_cast<ThreadStartData*>(parameter);
   assert_not_null(start_data);
   assert_not_null(start_data->thread_obj);
+
+  // Signal handlers must be able to run when a fiber stack is exhausted, so
+  // give every thread an alternate signal stack.
+  static thread_local std::unique_ptr<uint8_t[]> signal_stack(
+      new uint8_t[64 * 1024]);
+  stack_t altstack = {};
+  altstack.ss_sp = signal_stack.get();
+  altstack.ss_size = 64 * 1024;
+  sigaltstack(&altstack, nullptr);
 
   auto thread = dynamic_cast<PosixThread*>(start_data->thread_obj);
   auto start_routine = std::move(start_data->start_routine);

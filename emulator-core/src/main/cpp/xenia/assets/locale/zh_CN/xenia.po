@@ -113,10 +113,6 @@ msgstr "视图(&V)"
 msgid "&Volume"
 msgstr "音量(&V)"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(已安装) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(未知游戏)"
@@ -961,6 +957,14 @@ msgstr "未找到配置文件"
 msgid "No file path is set for this title."
 msgstr "未为此游戏设置文件路径。"
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "未找到游戏。"
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "未找到新游戏。"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1312,10 +1316,6 @@ msgstr "状态"
 msgid "Status: %s"
 msgstr "状态: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "状态: 已安装"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "停止当前游戏并返回列表"
@@ -1575,3 +1575,4 @@ msgstr "已安装 Direct3D 12 调试层，但无法自动重启。请重启 Xeni
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "未找到 vulkan-1.dll，Vulkan 图形后端需要它。立即下载 (~20 MB)？"
+

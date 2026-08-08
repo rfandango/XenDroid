@@ -113,10 +113,6 @@ msgstr "มุมมอง(&V)"
 msgid "&Volume"
 msgstr "ระดับเสียง(&V)"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(ติดตั้งแล้ว) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(ไม่ทราบชื่อเกม)"
@@ -963,6 +959,14 @@ msgstr "ไม่พบโปรไฟล์"
 msgid "No file path is set for this title."
 msgstr "ไม่ได้ตั้งพาธไฟล์สำหรับเกมนี้"
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "ไม่พบเกม"
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "ไม่พบเกมใหม่"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1314,10 +1318,6 @@ msgstr "สถานะ"
 msgid "Status: %s"
 msgstr "สถานะ: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "สถานะ: ติดตั้งแล้ว"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "หยุดเกมที่กำลังทำงานและกลับไปที่รายการ"
@@ -1577,3 +1577,4 @@ msgstr "ติดตั้งเลเยอร์ดีบัก Direct3D 12 �
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "ไม่พบ vulkan-1.dll ซึ่งจำเป็นสำหรับแบ็กเอนด์กราฟิก Vulkan ดาวน์โหลดเลยหรือไม่ (~20 MB)?"
+

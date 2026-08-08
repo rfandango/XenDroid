@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: WTFPL
 #include "xenia/game_quirks.h"
 
+#include <array>
 #include <string>
 #include <variant>
 
@@ -19,9 +20,16 @@ struct Quirk {
   const char* note;
 };
 
+// Entries apply at per-game-config priority, so a user's own per-game config
+// still overrides them.
 static const Quirk kQuirks[] = {
-    // Ace Combat 6: audio handshake deadlocks without strict event hand-off.
-    {0x4E4D07D1, "auto_reset_event_handoff", true, "audio-handshake deadlock"},
+    // Ninja Gaiden 2: the opening FMV renders as three time-skewed vertical
+    // slices when the restore half of the saverest inline is active. Every
+    // emitted expansion verifies correct, so the current reading is a latent
+    // guest-side race between the slice decode workers that the faster
+    // epilogues expose. Keep the save half inlined, call the restores.
+    {0x544307D5, "inline_gprlr_saverest_parts", int64_t(1),
+     "FMV slice desync with inlined restores"},
 };
 
 // Same path/priority as a per-game config file.

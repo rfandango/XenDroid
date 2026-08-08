@@ -42,6 +42,11 @@ class PPCHIRBuilder : public hir::HIRBuilder {
 
   GuestFunction* function() const { return function_; }
   Function* LookupFunction(uint32_t address);
+
+  // Expands a call to a small leaf function inline. Returns false (having
+  // emitted nothing) when the target does not qualify, in which case the
+  // caller emits a normal call.
+  bool TryInlineLeafCall(uint32_t target_address, uint64_t cia);
   Label* LookupLabel(uint32_t address);
 
   Value* LoadLR();
@@ -78,8 +83,6 @@ class PPCHIRBuilder : public hir::HIRBuilder {
   Value* LoadVR(uint32_t reg);
   void StoreVR(uint32_t reg, Value* value);
 
-  void StoreReserved(Value* val);
-  Value* LoadReserved();
   // calls original impl in hirbuilder, but also records the is_return_site bit
   // into flags in the guestmodule
   void SetReturnAddress(Value* value);
@@ -101,13 +104,17 @@ class PPCHIRBuilder : public hir::HIRBuilder {
   Instr** instr_offset_list_;
   Label** label_list_;
 
-  // Reset each instruction.
+  // Reset each instruction. Sized for what a single PowerPC instruction can
+  // write, so anything emitting a longer run of register stores from one
+  // instruction (an inlined helper, say) must not be allowed to run the
+  // counter past the end - see the guard in the Store*R helpers.
+  static constexpr uint32_t kMaxTraceDests = 4;
   struct {
     uint32_t dest_count;
     struct {
       uint8_t reg;
       Value* value;
-    } dests[4];
+    } dests[kMaxTraceDests];
   } trace_info_;
 };
 

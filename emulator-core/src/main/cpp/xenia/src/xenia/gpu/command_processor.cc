@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
+#include <set>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/byte_stream.h"
@@ -40,6 +42,17 @@ DEFINE_bool(
     "its own, just ones the guest makes or instructs it to make.",
     "GPU");
 
+DEFINE_uint32(
+    gpu_stall_spin_iterations, 32,
+    "How many times the command processor polls the ring buffer with a cheap "
+    "yield before parking on the write-pointer event when the guest has "
+    "produced no commands. The spin exists to dodge wake latency when the "
+    "guest is about to kick again immediately, but on ARM64 the yield is a "
+    "WFE that does not actually park on a busy SoC, so every iteration burns "
+    "a core at full clock. 0 parks immediately; the event is signalled by "
+    "UpdateWritePointer, so no wake-up is missed either way.",
+    "GPU");
+
 DEFINE_bool(disassemble_pm4, false,
             "Only does anything in debug builds, if set will disassemble and "
             "log all PM4 packets sent to the CP.",
@@ -51,11 +64,12 @@ DEFINE_bool(
     "of the guest thread that wrote the new read position.",
     "GPU");
 
-DEFINE_bool(clear_memory_page_state, true,
+DEFINE_bool(clear_memory_page_state, false,
             "Refresh state of memory pages to enable gpu written data. "
             "Uses mostly lock-free double-buffering for minimal overhead. "
-            "(Disable for minor performance boost, but may break rendering)",
+            "(Enable if rendering breaks, at a minor performance cost)",
             "GPU");
+UPDATE_from_bool(clear_memory_page_state, 2026, 8, 1, 12, true);
 
 DEFINE_bool(
     log_gpu_frame_time_breakdown, false,
@@ -85,16 +99,36 @@ DEFINE_string(
 
 DEFINE_string(
     readback_resolve, "uma",
-    "Controls CPU readback of render-to-texture resolve results.\n"
-    " uma: Read the mapped shared-memory buffer directly on unified-memory\n"
-    "      GPUs (Adreno etc.) - no GPU staging copy; falls back to fast when\n"
-    "      the buffer is not host-visible (default)\n"
-    " fast: Read from previous frame, copy every frame\n"
-    " some: Read from previous frame, skip copy on cache hit\n"
-    " full: Wait for GPU to finish (accurate but slow, GPU-CPU sync stall)\n"
-    " none: Disable readback completely (some games render better without it)",
+    "Controls which render-to-texture resolves are copied back into guest "
+    "RAM.\n"
+    " uma: No copy - the CPU reads the host-mapped shared memory directly. "
+    "The default, and the only mode that works on unified-memory GPUs "
+    "(Adreno). Needs host-mapped shared memory and no resolution scaling.\n"
+    " fast: Copy only resolves the CPU reads back\n"
+    " all: Copy every resolve\n"
+    " none: Disable readback completely (improves performance).\n",
     "GPU");
-UPDATE_from_string(readback_resolve, 2026, 7, 24, 12, "fast");
+
+DEFINE_bool(
+    memexport_enable, false,
+    "Make memory export output visible to the CPU by routing the draws that "
+    "write it to a buffer aliasing guest RAM. Needed by games that read "
+    "exported data on the CPU. Disabling it keeps the output in device-local "
+    "memory, which is faster for the draws that consume it on the GPU. Applies "
+    "at title launch. Off by default here: the host buffer needs "
+    "VK_EXT_external_memory_host, which Turnip does not expose, so the import "
+    "fails and the output stays device-local either way.",
+    "GPU");
+
+DEFINE_bool(
+    memexport_await_fences, false,
+    "Wait for the GPU to finish outstanding memory export before signalling a "
+    "fence the guest reads, so exported data is in guest RAM by the time the "
+    "guest looks at it. Disabling it avoids the stall but games reading "
+    "exported data on the CPU may see stale contents. Needs memexport_enable. "
+    "Off by default here: without the host buffer the wait is a full GPU stall "
+    "per fence that cannot make the output visible anyway.",
+    "GPU");
 
 DEFINE_bool(
     precise_interpolation, true,
@@ -108,22 +142,6 @@ DEFINE_bool(
     "Vulkan, SV_Barycentrics on Direct3D 12).",
     "GPU");
 
-DEFINE_bool(
-    readback_memexport, true,
-    "Read data written by memory export in shaders on the CPU. "
-    "This is needed in some games but many only access exported data on "
-    "the GPU, so can be disabled for minor optimization. When "
-    "combined with readback_memexport_fast, performance impact is minimal.",
-    "GPU");
-
-DEFINE_bool(readback_memexport_fast, true,
-            "Use fast (double-buffered, 1 frame delayed) readback for "
-            "memexport instead\n"
-            "of immediate GPU sync. Removes main performance penalty when "
-            "readback_memexport\n"
-            "is enabled at the expense of accuracy.",
-            "GPU");
-
 namespace xe {
 namespace gpu {
 
@@ -134,11 +152,8 @@ void SaveGPUSetting(GPUSetting setting, uint64_t value) {
     case GPUSetting::ClearMemoryPageState:
       OVERRIDE_bool(clear_memory_page_state, static_cast<bool>(value));
       break;
-    case GPUSetting::ReadbackMemexport:
-      OVERRIDE_bool(readback_memexport, static_cast<bool>(value));
-      break;
-    case GPUSetting::ReadbackMemexportFast:
-      OVERRIDE_bool(readback_memexport_fast, static_cast<bool>(value));
+    case GPUSetting::MemexportAwaitFences:
+      OVERRIDE_bool(memexport_await_fences, static_cast<bool>(value));
       break;
   }
 }
@@ -147,10 +162,8 @@ bool GetGPUSetting(GPUSetting setting) {
   switch (setting) {
     case GPUSetting::ClearMemoryPageState:
       return cvars::clear_memory_page_state;
-    case GPUSetting::ReadbackMemexport:
-      return cvars::readback_memexport;
-    case GPUSetting::ReadbackMemexportFast:
-      return cvars::readback_memexport_fast;
+    case GPUSetting::MemexportAwaitFences:
+      return cvars::memexport_await_fences;
     default:
       return false;
   }
@@ -165,19 +178,22 @@ std::atomic<int> readback_resolve_mode_cache{-1};
 std::atomic<int> zpd_mode_cache{-1};
 
 ReadbackResolveMode ParseReadbackResolveMode(const std::string& mode) {
-  if (mode == "full") {
-    return ReadbackResolveMode::kFull;
-  } else if (mode == "some") {
-    return ReadbackResolveMode::kSome;
+  if (mode == "all") {
+    return ReadbackResolveMode::kAll;
   } else if (mode == "uma") {
     return ReadbackResolveMode::kUma;
-  } else if (mode == "fast") {
-    return ReadbackResolveMode::kFast;
   } else if (mode == "none") {
     return ReadbackResolveMode::kDisabled;
+  } else if (mode == "fast") {
+    return ReadbackResolveMode::kFast;
   } else {
-    // Default to "uma" for any unrecognized value (falls back to fast when the
-    // shared-memory buffer is not host-mapped).
+    // Retired values (some/full) and typos: fall back to the default rather
+    // than to a mode that copies nothing on unified-memory GPUs.
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      XELOGW("Unknown readback_resolve value '{}' - using uma", mode);
+    }
     return ReadbackResolveMode::kUma;
   }
 }
@@ -438,11 +454,8 @@ void CommandProcessor::SetReadbackResolveMode(ReadbackResolveMode mode) {
     case ReadbackResolveMode::kDisabled:
       mode_str = "none";
       break;
-    case ReadbackResolveMode::kSome:
-      mode_str = "some";
-      break;
-    case ReadbackResolveMode::kFull:
-      mode_str = "full";
+    case ReadbackResolveMode::kAll:
+      mode_str = "all";
       break;
     case ReadbackResolveMode::kUma:
       mode_str = "uma";
@@ -671,7 +684,7 @@ void CommandProcessor::WorkerThreadMain() {
       uint32_t loop_count = 0;
       do {
         // If we spin around too much, revert to a "low-power" state.
-        if (loop_count > 500) {
+        if (loop_count > cvars::gpu_stall_spin_iterations) {
           constexpr int wait_time_ms = 2;
           xe::threading::Wait(write_ptr_index_event_.get(), true,
                               std::chrono::milliseconds(wait_time_ms));
@@ -899,13 +912,21 @@ void CommandProcessor::HandleSpecialRegisterWrite(uint32_t index,
       // Enabled - write to address.
       uint32_t scratch_addr = regs.values[XE_GPU_REG_SCRATCH_ADDR];
       uint32_t mem_addr = scratch_addr + (scratch_reg * 4);
-      // Unbudgeted log for RARE callback installs (REG4: anything that is
-      // not the sentinel or the two per-frame swap/vblank callbacks) - the
-      // deferred-kick train install is the event of interest.
+      // A REG4 value that is not one of the known per-frame callbacks is
+      // interesting once, but "known" is a hardcoded list from one title:
+      // any other game's callback looks rare on every single write. Log the
+      // first sighting of each distinct value, so an install is still
+      // reported without spending a formatted log line per frame forever.
       static std::atomic<uint32_t> scratch_log_budget{64};
       bool rare_install =
           scratch_reg == 4 && value != 0x0BADF00D && value != 0x83744BF8 &&
           value != 0x837C59C8;
+      if (rare_install) {
+        static std::mutex seen_mutex;
+        static std::set<uint32_t> seen_installs;
+        std::lock_guard<std::mutex> lock(seen_mutex);
+        rare_install = seen_installs.insert(value).second;
+      }
       if (rare_install ||
           (scratch_log_budget.load() > 0 && scratch_log_budget-- > 0)) {
         XELOGI("CP: scratch writeback REG{} value={:08X} -> phys {:08X}{}",
@@ -1492,7 +1513,9 @@ bool CommandProcessor::EndZPDReport(uint32_t report_address,
 
   if (logical.pending_segments == 0) {
     resolved_immediately = true;
-    final_value = NormalizeSampleCount(logical.accumulated_samples);
+    // Segments were already normalized as they resolved.
+    final_value = static_cast<uint32_t>(
+        std::min<uint64_t>(logical.accumulated_samples, UINT32_MAX));
 
     cached_delta = final_value;
     has_cached_delta = true;
@@ -1628,6 +1651,7 @@ void CommandProcessor::CloseQuerySegment() {
   uint64_t submission = 0;
   if (!CloseZPDQuery(zpd_active_segment_.report_handle, submission)) {
     zpd_active_segment_.segment_active = false;
+    zpd_active_segment_.scale_area = 0;
     zpd_active_segment_.segment_pending_begin =
         zpd_active_segment_.logical_active;
     zpd_stats_.failed++;
@@ -1646,14 +1670,30 @@ void CommandProcessor::CloseQuerySegment() {
   }
 
   zpd_active_segment_.segment_active = false;
+  zpd_active_segment_.scale_area = 0;
 
   zpd_active_segment_.segment_pending_begin =
       zpd_active_segment_.logical_active;
   zpd_stats_.segments_ended++;
 }
 
+void CommandProcessor::UpdateZPDScale(uint32_t scale_area) {
+  if (GetZPDMode() == ZPDMode::kFake || !zpd_active_segment_.logical_active) {
+    return;
+  }
+  if (zpd_active_segment_.segment_active && zpd_active_segment_.scale_area &&
+      zpd_active_segment_.scale_area != scale_area) {
+    // Draw scale changed in the middle of a report, so close the segment so
+    // normalization divides correctly, and start a fresh one for this draw.
+    CloseQuerySegment();
+    OpenQuerySegment(false);
+  }
+  zpd_active_segment_.scale_area = scale_area;
+}
+
 void CommandProcessor::OnZPDQueryResolved(ReportHandle report_handle,
-                                          uint64_t raw_samples) {
+                                          uint64_t raw_samples,
+                                          uint32_t scale_area) {
   auto it = logical_zpd_reports_.find(report_handle);
   if (it == logical_zpd_reports_.end()) {
     return;
@@ -1665,10 +1705,11 @@ void CommandProcessor::OnZPDQueryResolved(ReportHandle report_handle,
     logical.pending_segments--;
   }
 
-  logical.accumulated_samples += raw_samples;
+  logical.accumulated_samples += NormalizeSampleCount(raw_samples, scale_area);
 
   if (logical.ended && logical.pending_segments == 0) {
-    uint32_t final_value = NormalizeSampleCount(logical.accumulated_samples);
+    uint32_t final_value = static_cast<uint32_t>(
+        std::min<uint64_t>(logical.accumulated_samples, UINT32_MAX));
 
     logical.cached_delta = final_value;
     logical.has_cached_delta = true;
@@ -1801,12 +1842,13 @@ bool CommandProcessor::IsZPDReportCurrent(const ZPDReport& report) const {
   return current_seq == report.slot_sequence_id;
 }
 
-uint32_t CommandProcessor::NormalizeSampleCount(uint64_t samples) const {
+uint32_t CommandProcessor::NormalizeSampleCount(uint64_t samples,
+                                                uint32_t scale_area) {
   if (samples == 0) {
     return 0;
   }
 
-  uint64_t scale = zpd_draw_resolution_scale_x_ * zpd_draw_resolution_scale_y_;
+  uint64_t scale = scale_area;
   // Round, don't truncate. 1 guest sample at 2x = 4 host samples, need >= 1.
   uint64_t normalized = scale <= 1 ? samples : (samples + (scale >> 1)) / scale;
 

@@ -61,6 +61,16 @@ DEFINE_uint32(
     "textures - so with 2x2 resolution scaling, the soft limit will be 360 + "
     "96 MB, and with 3x3, it will be 360 + 216 MB.",
     "GPU");
+DEFINE_bool(
+    texture_integer_num_format, false,
+    "Honour the texture fetch constant's integer num_format bit by scaling "
+    "sampled components back to guest integer units (x255 for 8-bit, x65535 "
+    "for 16-bit). Costs a per-component rescale inside every texture fetch that "
+    "requests it, which is measurable where fragment shading is the "
+    "bottleneck. Off samples everything as normalized, which is what the "
+    "emulator did before upstream implemented this.",
+    "GPU");
+
 DEFINE_bool(tiled_shared_memory, true,
             "Enable tiled/sparse resources for efficient large address space "
             "support. Disable for graphics debugger compatibility.",
@@ -285,7 +295,8 @@ void TextureCache::BeginFrame() {
 }
 
 void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled,
-                                       uint32_t length_unscaled) {
+                                       uint32_t length_unscaled,
+                                       bool resolution_scaled) {
   if (length_unscaled == 0) {
     return;
   }
@@ -307,8 +318,17 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled,
       if (i == block_last && (page_last & 31) != 31) {
         add_bits &= (UINT32_C(1) << ((page_last & 31) + 1)) - 1;
       }
-      scaled_resolve_pages_[i] |= add_bits;
-      scaled_resolve_pages_l2_[i >> 6] |= UINT64_C(1) << (i & 63);
+      if (resolution_scaled) {
+        scaled_resolve_pages_[i] |= add_bits;
+        scaled_resolve_pages_l2_[i >> 6] |= UINT64_C(1) << (i & 63);
+      } else {
+        // Native resolve data is in shared memory.
+        // Clear the same way the CPU write watch does.
+        scaled_resolve_pages_[i] &= ~add_bits;
+        if (!scaled_resolve_pages_[i]) {
+          scaled_resolve_pages_l2_[i >> 6] &= ~(UINT64_C(1) << (i & 63));
+        }
+      }
     }
   }
 
@@ -358,6 +378,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     TextureBinding& binding = texture_bindings_[index];
     xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(index);
     TextureKey old_key = binding.key;
+    uint32_t old_integer_scale_bits = binding.integer_scale_bits;
     uint8_t old_swizzled_signs = binding.swizzled_signs;
     const bool binding_was_outdated =
         old_key.is_valid && IsBindingOutdatedForUse(binding);
@@ -373,6 +394,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     uint32_t old_host_swizzle = binding.host_swizzle;
     binding.host_swizzle =
         GuestToHostSwizzle(fetch.swizzle, GetHostFormatSwizzle(binding.key));
+    binding.integer_scale_bits =
+        GetIntegerScaleBits(fetch.format, fetch.num_format,
+                            binding.host_swizzle, binding.swizzled_signs);
 
     // Check if need to load the unsigned and the signed versions of the texture
     // (if the format is emulated with different host bit representations for
@@ -386,7 +410,8 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
         texture_util::IsAnySignNotSigned(binding.swizzled_signs);
     bool any_sign_is_signed =
         texture_util::IsAnySignSigned(binding.swizzled_signs);
-    if (key_changed || binding.host_swizzle != old_host_swizzle ||
+    if (key_changed || binding.integer_scale_bits != old_integer_scale_bits ||
+        binding.host_swizzle != old_host_swizzle ||
         any_sign_is_not_signed != any_sign_was_not_signed ||
         any_sign_is_signed != any_sign_was_signed) {
       bindings_changed |= index_bit;
@@ -747,6 +772,70 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
   texture->LogAction("Created");
   return texture;
 }
+
+// Packs the integer scale the fetch shader reads from the system constant to
+// undo the host sampler's normalization - the guest wants e.g. [0, 255], not
+// [0, 1]. 6 bits per output component: bits 0:3 = width - 1, bit 4 = signed,
+// bit 5 = unsigned-biased. The scale lands after swizzling, so each output lane
+// walks the host swizzle back to its source component's width; constant (0/1)
+// lanes, gamma, and non-fixed formats have nothing to rescale and stay 0.
+uint32_t TextureCache::GetIntegerScaleBits(xenos::TextureFormat guest_format,
+                                           uint32_t num_format,
+                                           uint32_t host_swizzle,
+                                           uint8_t swizzled_signs) {
+  // num_format 0 is the normalized/fractional fetch - nothing to rescale.
+  const FormatInfo& format_info = *FormatInfo::Get(guest_format);
+  uint32_t scale_bits = 0;
+
+  if (!num_format || !format_info.fixed) {
+    return 0;
+  }
+
+  // Report what the guest asked for even when the scaling is disabled, so a
+  // silent log does not get mistaken for "the title never sets num_format".
+  {
+    static std::atomic<uint32_t> logged{0};
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+      XELOGW(
+          "Texture integer num_format requested for {} (swizzle {:#x}, signs "
+          "{:#x}) - scaling {}",
+          FormatInfo::GetName(format_info.format), host_swizzle,
+          swizzled_signs,
+          cvars::texture_integer_num_format ? "applied" : "SUPPRESSED by cvar");
+    }
+  }
+  if (!cvars::texture_integer_num_format) {
+    return 0;
+  }
+
+  for (uint32_t i = 0; i < 4; ++i) {
+    uint32_t source_component = (host_swizzle >> (i * 3)) & 0b111;
+    if (source_component >= xenos::XE_GPU_TEXTURE_SWIZZLE_0) {
+      continue;
+    }
+
+    xenos::TextureSign sign =
+        xenos::TextureSign((swizzled_signs >> (i * 2)) & 0b11);
+
+    uint8_t width = format_info.component_bits[source_component];
+    if (!width || width > 16 || sign == xenos::TextureSign::kGamma) {
+      continue;
+    }
+
+    uint32_t component_scale = uint32_t(width - 1);
+    if (sign == xenos::TextureSign::kSigned) {
+      component_scale |= UINT32_C(1) << 4;
+      // Unsigned-biased: halve the scaled value and apply an extra offset.
+    } else if (sign == xenos::TextureSign::kUnsignedBiased) {
+      component_scale |= UINT32_C(1) << 5;
+    }
+
+    scale_bits |= component_scale << (i * 6);
+  }
+
+  return scale_bits;
+}
+
 void TextureCache::LoadTexturesData(Texture** textures, uint32_t n_textures) {
   assert_true(n_textures <= 64);
   if (n_textures < 2) {

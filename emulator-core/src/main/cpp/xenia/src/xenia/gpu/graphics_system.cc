@@ -210,9 +210,38 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
 #endif
                 }
 #elif XE_PLATFORM_LINUX
-                // Linux: simplified timing to avoid oversleeping
-                MarkVblank();
-                threading::NanoSleep(sleep_ns);
+                // Absolute-deadline pacing: carry the anchor forward and
+                // sleep only the remainder. Sleeping a full period let
+                // oversleep accumulate, sagging the vblank rate toward half
+                // on a loaded device.
+                const uint64_t tick_freq = Clock::guest_tick_frequency();
+                const uint64_t target_duration_ticks = tick_freq / vblank_hz;
+                const uint64_t current_time = Clock::QueryGuestTickCount();
+                const uint64_t time_delta = current_time - last_frame_time;
+
+                if (time_delta >= target_duration_ticks) {
+                  // More than 2 periods behind: resync instead of firing a
+                  // burst of catch-up vblanks.
+                  if (time_delta > target_duration_ticks * 2) {
+                    last_frame_time = current_time;
+                  } else {
+                    last_frame_time += target_duration_ticks;
+                  }
+                  MarkVblank();
+                }
+                // Sleep only until the next deadline, precisely: the plain
+                // NanoSleep quantum overshoot is exactly what starved the
+                // cadence.
+                {
+                  const uint64_t now = Clock::QueryGuestTickCount();
+                  const uint64_t next = last_frame_time + target_duration_ticks;
+                  if (next > now) {
+                    const uint64_t remain_ticks = next - now;
+                    const uint64_t remain_ns = static_cast<uint64_t>(
+                        remain_ticks * (1000000000.0 / tick_freq));
+                    threading::NanoSleepPrecise(remain_ns);
+                  }
+                }
 #endif
               } else {
                 // Unlimited mode (guest_display_refresh_cap=false) - fire
@@ -229,8 +258,11 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
   frame_limiter_worker_thread_->set_can_debugger_suspend(true);
   frame_limiter_worker_thread_->set_name("GPU Frame limiter");
   frame_limiter_worker_thread_->Create();
+  // This thread is the vblank clock for every title that paces itself on
+  // vblank acks; at kLowest it was starved under load and the guest frame
+  // rate sagged with it.
   frame_limiter_worker_thread_->thread()->set_priority(
-      threading::ThreadPriority::kLowest);
+      threading::ThreadPriority::kNormal);
   if (cvars::trace_gpu_stream) {
     BeginTracing();
   }

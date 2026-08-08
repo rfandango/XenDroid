@@ -42,7 +42,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // TODO(Triang3l): Change to 0xYYYYMMDD once it's out of the rapid
     // prototyping stage (easier to do small granular updates with an
     // incremental counter).
-    static constexpr uint32_t kVersion = 14;
+    static constexpr uint32_t kVersion = 16;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
@@ -107,8 +107,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
       uint32_t interpolator_mask : xenos::kMaxInterpolators;
       uint32_t interpolators_centroid : xenos::kMaxInterpolators;
       // uint32_t 1.
-      // Dynamically indexable register count from SQ_PROGRAM_CNTL.
-      uint32_t dynamic_addressable_register_count : 8;
+      // Dynamically indexable register count from SQ_PROGRAM_CNTL. Max 64.
+      uint32_t dynamic_addressable_register_count : 7;
       uint32_t param_gen_enable : 1;
       uint32_t param_gen_interpolator : 4;
       // If param_gen_enable is set, this must be set for point primitives, and
@@ -128,6 +128,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
       uint32_t color_targets_used : xenos::kMaxColorRenderTargets;
       // Whether to use manual barycentric interpolation for precision.
       uint32_t precise_interpolation : 1;
+      // PsParamGen and the memexport dedup must act like there's no resolution
+      // scaling. Doesn't affect fetch offsets, those follow texture scale, not
+      // from the draw. This is only set when the draw is native because of a
+      // set scale threshold (FBO only).
+      uint32_t resolution_scale_native : 1;
     } pixel;
     uint64_t value = 0;
 
@@ -329,6 +334,24 @@ class SpirvShaderTranslator : public ShaderTranslator {
     uint32_t tessellation_vertex_index_endian;
     uint32_t tessellation_vertex_index_offset;
     uint32_t tessellation_vertex_index_min_max[2];
+
+    // Ucode interpreter VS placeholder. Guest VS ucode location in shared
+    // memory as a dword address, and its control-flow instruction count. Zero
+    // unless the interpreter is bound for this draw. Appended after the
+    // tessellation tail so the static_assert offsets above are unaffected.
+    // Read as std140 uint4 [34].xy by ucode_interpreter.vs.slang.
+    uint32_t interpreter_ucode_base_dwords;
+    uint32_t interpreter_cf_instr_count;
+    uint32_t texture_integer_scale_pad[2];
+
+    // Integer num_format on fixed textures. Each dword packs the scale needed
+    // to turn normalized host samples back into guest integer values.
+    // bits 0:3 = component_bits - 1
+    // bit 4 = signed.
+    // Zero means no scale.
+    // Appended at the very tail (std140 uint4 [35]) so it disturbs neither the
+    // xenos_draw.glsli tessellation offsets nor the interpreter [34] slot.
+    uint32_t texture_integer_scale_bits[32];
   };
 
   // xenos_draw.glsli reads these tessellation fields from the system constants
@@ -457,6 +480,10 @@ class SpirvShaderTranslator : public ShaderTranslator {
   uint64_t GetDefaultPixelShaderModification(
       uint32_t dynamic_addressable_register_count) const override;
 
+  // Feature set the translator emits for, so host helper shaders (e.g. the
+  // built-in geometry shader) can match the SPIR-V version and float controls.
+  const Features& features() const { return features_; }
+
   static constexpr uint32_t GetSharedMemoryStorageBufferCountLog2(
       uint32_t max_storage_buffer_range) {
     if (max_storage_buffer_range >= 512 * 1024 * 1024) {
@@ -514,14 +541,13 @@ class SpirvShaderTranslator : public ShaderTranslator {
                                uint32_t f24_shift, bool remap_to_0_to_0_5,
                                bool result_as_uint,
                                spv::Id ext_inst_glsl_std_450);
-  // Piecewise-linear gamma conversions for k_8_8_8_8_GAMMA render targets
-  // stored as linear in a higher-precision host format. value may be a float
-  // scalar or a vector of up to 3 components. If not pre_saturated, the input
-  // is clamped to [0, 1] (flushing NaN to 0).
-  static spv::Id PWLGammaToLinear(SpirvBuilder& builder, spv::Id value,
+  // Piecewise-linear gamma conversions for k_8_8_8_8_GAMMA values stored as
+  // linear UNORM16. Values may be scalars or vectors of up to 3 components.
+  // Unless pre_saturated is true, inputs are clamped to [0, 1] (NaN to 0).
+  static spv::Id PWLGammaToLinear(SpirvBuilder* builder_, spv::Id value,
                                   bool pre_saturated,
                                   spv::Id ext_inst_glsl_std_450);
-  static spv::Id LinearToPWLGamma(SpirvBuilder& builder, spv::Id value,
+  static spv::Id LinearToPWLGamma(SpirvBuilder* builder_, spv::Id value,
                                   bool pre_saturated,
                                   spv::Id ext_inst_glsl_std_450);
 
@@ -798,10 +824,6 @@ class SpirvShaderTranslator : public ShaderTranslator {
 
   void ExportToMemory(uint8_t export_eM);
 
-  // The source may be a floating-point scalar or a vector.
-  spv::Id PWLGammaToLinear(spv::Id gamma, bool gamma_pre_saturated);
-  spv::Id LinearToPWLGamma(spv::Id linear, bool linear_pre_saturated);
-
   size_t FindOrAddTextureBinding(uint32_t fetch_constant,
                                  xenos::FetchOpDimension dimension,
                                  bool is_signed);
@@ -898,6 +920,21 @@ class SpirvShaderTranslator : public ShaderTranslator {
   bool native_2x_msaa_no_attachments_;
   uint32_t draw_resolution_scale_x_;
   uint32_t draw_resolution_scale_y_;
+
+  // Scale of the draw being translated. All position-dependent paths use
+  // these. Only fetch offset scaling uses draw_resolution_scale_x_/y_ directly.
+  uint32_t GetCurrentDrawResolutionScaleX() const {
+    return is_pixel_shader() &&
+                   GetSpirvShaderModification().pixel.resolution_scale_native
+               ? 1
+               : draw_resolution_scale_x_;
+  }
+  uint32_t GetCurrentDrawResolutionScaleY() const {
+    return is_pixel_shader() &&
+                   GetSpirvShaderModification().pixel.resolution_scale_native
+               ? 1
+               : draw_resolution_scale_y_;
+  }
 
   // For safety with different drivers (even though fragment shader interlock in
   // SPIR-V only has one control flow requirement - that both begin and end must
@@ -1029,6 +1066,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
     kSystemConstantTessellationVertexIndexEndian,
     kSystemConstantTessellationVertexIndexOffset,
     kSystemConstantTessellationVertexIndexMinMax,
+    kSystemConstantInterpreterUcodeBaseDwords,
+    kSystemConstantInterpreterCfInstrCount,
+    kSystemConstantTextureIntegerScaleBits,
   };
   spv::Id uniform_system_constants_;
   spv::Id uniform_float_constants_;
@@ -1155,6 +1195,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
   // `base + index * stride` in dwords from the last vfetch_full as it may be
   // needed by vfetch_mini - int.
   spv::Id var_main_vfetch_address_;
+  // Exclusive end (base + size) in dwords of the last vfetch_full's buffer, for
+  // clamping out-of-bounds words to 0 in both it and its vfetch_mini - int.
+  spv::Id var_main_vfetch_bound_;
   // float.
   spv::Id var_main_tfetch_lod_;
   // float3.

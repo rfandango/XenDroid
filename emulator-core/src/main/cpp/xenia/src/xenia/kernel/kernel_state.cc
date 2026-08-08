@@ -88,6 +88,10 @@ KernelState::~KernelState() {
 
   ShutdownDispatchThread();
 
+  // Reclaiming leftover fibers releases handles, so run this while the object
+  // table is still alive.
+  guest_scheduler_->Shutdown();
+
   executable_module_.reset();
   user_modules_.clear();
   kernel_modules_.clear();
@@ -606,6 +610,9 @@ object_ref<UserModule> KernelState::LoadUserModule(
     global_lock.unlock();
 
     // Module wasn't loaded, so load it.
+    // TODO: this read, decrypt and decompress stalls the calling fiber's
+    // dispatch thread. Offloading it needs care, it touches kernel state and
+    // guest-thread identity.
     module = object_ref<UserModule>(new UserModule(this));
     X_STATUS status = module->LoadFromFile(path);
     if (XFAILED(status)) {

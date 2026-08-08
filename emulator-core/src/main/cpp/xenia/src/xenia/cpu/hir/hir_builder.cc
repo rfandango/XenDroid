@@ -206,7 +206,11 @@ void HIRBuilder::DumpOp(StringBuffer* str, OpcodeSignatureType sig_type,
     case OPCODE_SIG_TYPE_S:
       if (true) {
         auto target = op->symbol;
-        str->Append(!target->name().empty() ? target->name() : "<fn>");
+        if (!target->name().empty()) {
+          str->Append(target->name());
+        } else {
+          str->AppendFormat("sub_{:08X}", target->address());
+        }
       }
       break;
     case OPCODE_SIG_TYPE_V:
@@ -811,6 +815,10 @@ void HIRBuilder::Nop() {
   i->src1.value = i->src2.value = i->src3.value = NULL;
 }
 
+Instr* HIRBuilder::CheckPreempt() {
+  return AppendInstr(OPCODE_CHECK_PREEMPT_info, 0);
+}
+
 void HIRBuilder::SourceOffset(uint32_t offset) {
   Instr* i = AppendInstr(OPCODE_SOURCE_OFFSET_info, 0);
   i->src1.offset = offset;
@@ -1355,14 +1363,17 @@ void HIRBuilder::CacheControl(Value* address, size_t cache_line_size,
 
 void HIRBuilder::MemoryBarrier() { AppendInstr(OPCODE_MEMORY_BARRIER_info, 0); }
 
+void HIRBuilder::LoadBarrier() { AppendInstr(OPCODE_LOAD_BARRIER_info, 0); }
+
 void HIRBuilder::DelayExecution() {
   AppendInstr(OPCODE_DELAY_EXECUTION_info, 0);
 }
 
-void HIRBuilder::SpinBackoff(uint32_t units) {
+Instr* HIRBuilder::SpinBackoff(uint32_t units) {
   Instr* i = AppendInstr(OPCODE_SPIN_BACKOFF_info, 0);
   i->src1.offset = units;
   i->src2.value = i->src3.value = NULL;
+  return i;
 }
 void HIRBuilder::SetRoundingMode(Value* value) {
   ASSERT_INTEGER_TYPE(value);

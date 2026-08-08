@@ -37,6 +37,50 @@ DEFINE_bool(
     "be minimal if only a small portion of the scene is affected.",
     "GPU");
 
+DEFINE_bool(
+    resolve_check_number_format, true,
+    "Require the destination number format to match before using fast color "
+    "resolves.\n"
+    "Fast resolves copy the exact EDRAM bits. If a title resolves unsigned "
+    "color data to a signed or integer destination, enabling this forces full "
+    "resolves in the shader so the destination gets repacked instead.",
+    "GPU");
+UPDATE_from_bool(resolve_check_number_format, 2026, 7, 30, 12, false);
+
+DEFINE_bool(
+    accurate_resolve_number_formats, false,
+    "Handle signed/integer resolve destination number formats and decode "
+    "8_8_8_8_GAMMA sources through the PWL curve during resolves.\n"
+    "Both are accuracy features that only a handful of titles need, but they "
+    "are compiled into every full resolve shader, and the unused code costs "
+    "registers and occupancy on mobile GPUs even when it never runs - "
+    "measured at roughly a third of the frame rate in a resolve-heavy title.\n"
+    "Off uses lean resolve shaders that treat destinations as unsigned "
+    "fractions, which is what the emulator did before. Enable only for a "
+    "title with wrong resolve colours or gamma blowout.",
+    "GPU");
+
+DEFINE_bool(
+    resolve_copy_dest_number_packing, false,
+    "Pack full-resolve fixed destinations according to copy_dest_number "
+    "instead of assuming an unsigned fraction.\n"
+    "Off restores the pre-upstream packing and keeps signed/integer "
+    "destinations eligible for the raw fast copy. Only has an effect with "
+    "accurate_resolve_number_formats on; the lean shaders ignore the "
+    "destination number format entirely.",
+    "GPU");
+
+DEFINE_bool(
+    gamma_decode_pwl_resolve, true,
+    "During 8_8_8_8_GAMMA MSAA color resolves, average the samples in linear "
+    "space instead of averaging the encoded PWL gamma values directly.\n"
+    "This is separate from gamma_render_target_as_unorm16. It only applies "
+    "when a full shader resolve reads an 8_8_8_8_GAMMA EDRAM color source. "
+    "Compatible 8_8_8_8 destinations are written back as PWL gamma.\n"
+    "Leave enabled for games that otherwise look overexposed after gamma "
+    "MSAA resolves. Disable only if it causes a title-specific regression.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 namespace draw_util {
@@ -1332,6 +1376,8 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
     color_edram_info.format = uint32_t(color_info.color_format);
     color_edram_info.format_is_64bpp = is_64bpp;
     color_edram_info.fill_half_pixel_offset = uint32_t(fill_half_pixel_offset);
+    color_edram_info.decode_pwl_gamma =
+        cvars::gamma_decode_pwl_resolve ? 1u : 0u;
     if ((fixed_rg16_truncated_to_minus_1_to_1 &&
          color_info.color_format == xenos::ColorRenderTargetFormat::k_16_16) ||
         (fixed_rgba16_truncated_to_minus_1_to_1 &&
@@ -1354,6 +1400,13 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
   // Override with the depth format to make sure the shader doesn't have any
   // reason to try to do k_8_8_8_8 packing.
   info_out.copy_dest_info.copy_dest_format = xenos::ColorFormat(dest_format);
+  if (!cvars::resolve_copy_dest_number_packing) {
+    // Pre-upstream behaviour: the full-resolve packers assumed an unsigned
+    // fraction destination. Forcing it here also feeds the fast-path number
+    // format test below, so a raw copy stays eligible exactly as it used to.
+    info_out.copy_dest_info.copy_dest_number =
+        xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction;
+  }
   // Handle k_16_16 and k_16_16_16_16 range.
   info_out.copy_dest_info.copy_dest_exp_bias = exp_bias;
   if (is_depth) {
@@ -1380,6 +1433,27 @@ bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
   return true;
 }
 XE_MSVC_OPTIMIZE_REVERT()
+
+// Raw resolve is only safe when the destination would read the same bits the
+// active EDRAM view already stores. Canonical fixed colors are unsigned
+// fractions and float colors are floats; signed/integer destinations need full
+// resolve so copy_dest_number can actually repack them.
+static constexpr bool ColorResolveNumberFormatMatches(
+    xenos::ColorFormat color_format, xenos::SurfaceNumberFormat num_format) {
+  switch (color_format) {
+    case xenos::ColorFormat::k_16_FLOAT:
+    case xenos::ColorFormat::k_16_16_FLOAT:
+    case xenos::ColorFormat::k_16_16_16_16_FLOAT:
+    case xenos::ColorFormat::k_32_FLOAT:
+    case xenos::ColorFormat::k_32_32_FLOAT:
+    case xenos::ColorFormat::k_32_32_32_32_FLOAT:
+      return num_format == xenos::SurfaceNumberFormat::kFloat;
+    default:
+      return num_format ==
+             xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction;
+  }
+}
+
 ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
     uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y,
     ResolveCopyShaderConstants& constants_out, uint32_t& group_count_x_out,
@@ -1388,12 +1462,25 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
   bool is_depth = IsCopyingDepth();
   ResolveEdramInfo edram_info = is_depth ? depth_edram_info : color_edram_info;
   bool source_is_64bpp = !is_depth && color_edram_info.format_is_64bpp != 0;
-  if (is_depth || (!copy_dest_info.copy_dest_exp_bias &&
-                   xenos::IsSingleCopySampleSelected(
-                       copy_dest_coordinate_info.copy_sample_select) &&
-                   xenos::IsColorResolveFormatBitwiseEquivalent(
-                       xenos::ColorRenderTargetFormat(color_edram_info.format),
-                       xenos::ColorFormat(copy_dest_info.copy_dest_format)))) {
+  // Fast color resolve is a raw copy. If copy_dest_number asks for a different
+  // target that'd be decoded to linear by a real hardware resolve, it needs the
+  // full shader conversion. Any title keeping the encoding will re-alias as
+  // 8_8_8_8 before resolving, so any gamma source is always being decoded.
+  bool gamma_decoded_source =
+      !is_depth && color_edram_info.decode_pwl_gamma &&
+      xenos::ColorRenderTargetFormat(color_edram_info.format) ==
+          xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA;
+  if (is_depth ||
+      (!gamma_decoded_source && !copy_dest_info.copy_dest_exp_bias &&
+       xenos::IsSingleCopySampleSelected(
+           copy_dest_coordinate_info.copy_sample_select) &&
+       xenos::IsColorResolveFormatBitwiseEquivalent(
+           xenos::ColorRenderTargetFormat(color_edram_info.format),
+           xenos::ColorFormat(copy_dest_info.copy_dest_format)) &&
+       (!cvars::resolve_check_number_format ||
+        ColorResolveNumberFormatMatches(
+            xenos::ColorFormat(copy_dest_info.copy_dest_format),
+            copy_dest_info.copy_dest_number)))) {
     if (edram_info.msaa_samples >= xenos::MsaaSamples::k4X) {
       shader = source_is_64bpp ? ResolveCopyShaderIndex::kFast64bpp4xMSAA
                                : ResolveCopyShaderIndex::kFast32bpp4xMSAA;
@@ -1451,6 +1538,15 @@ ResolveCopyShaderIndex ResolveInfo::GetCopyShader(
   }
 
   return shader;
+}
+
+uint32_t GetResolveDownscalePixelSizeLog2(
+    reg::RB_COPY_DEST_INFO copy_dest_info) {
+  // copy_dest_format holds a xenos::TextureFormat normalized by GetResolveInfo,
+  // and this is the same size derivation it used for the destination extent.
+  const FormatInfo& dest_format_info = *FormatInfo::Get(
+      xenos::TextureFormat(uint32_t(copy_dest_info.copy_dest_format)));
+  return xe::log2_floor(dest_format_info.bits_per_pixel >> 3);
 }
 
 }  // namespace draw_util

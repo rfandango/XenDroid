@@ -1956,7 +1956,11 @@ struct STVL_V128 : Sequence<STVL_V128, I<OPCODE_STVL, VoidOp, I64Op, V128Op>> {
     e.add(e.x0, e.sp, static_cast<uint32_t>(StackLayout::GUEST_SCRATCH));
 
     // for (i = offset; i < 16; ++i) mem[base + i] = stash[i - offset];
-    Xbyak_aarch64::Label loop, done;
+    // Heap-backed via the emitter's cache: xbyak's LabelManager registers
+    // labels by address and outlives this frame, so a stack Label leaves a
+    // dangling entry behind for a later defineClabel to trip over.
+    auto& loop = e.NewCachedLabel();
+    auto& done = e.NewCachedLabel();
     e.mov(e.w1, e.w17);
     e.L(loop);
     e.cmp(e.w1, 16);
@@ -1994,7 +1998,11 @@ struct STVR_V128 : Sequence<STVR_V128, I<OPCODE_STVR, VoidOp, I64Op, V128Op>> {
     e.sub(e.w6, e.w6, e.w17);  // source tail starts at 16 - offset
 
     // for (i = 0; i < offset; ++i) mem[base + i] = stash[16 - offset + i];
-    Xbyak_aarch64::Label loop, done;
+    // Heap-backed via the emitter's cache: xbyak's LabelManager registers
+    // labels by address and outlives this frame, so a stack Label leaves a
+    // dangling entry behind for a later defineClabel to trip over.
+    auto& loop = e.NewCachedLabel();
+    auto& done = e.NewCachedLabel();
     e.mov(e.w1, 0);
     e.L(loop);
     e.cmp(e.w1, e.w17);

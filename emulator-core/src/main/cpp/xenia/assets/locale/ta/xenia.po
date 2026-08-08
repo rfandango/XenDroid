@@ -115,10 +115,6 @@ msgstr "காட்சி(&V)"
 msgid "&Volume"
 msgstr "ஒலி அளவு(&V)"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(நிறுவப்பட்டது) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(தெரியாத தலைப்பு)"
@@ -965,6 +961,14 @@ msgstr "சுயவிவரங்கள் இல்லை"
 msgid "No file path is set for this title."
 msgstr "இந்தத் தலைப்புக்கு கோப்புப் பாதை எதுவும் அமைக்கப்படவில்லை."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "விளையாட்டுகள் எதுவும் கிடைக்கவில்லை."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "புதிய விளையாட்டுகள் எதுவும் கிடைக்கவில்லை."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1317,10 +1321,6 @@ msgstr "நிலை"
 msgid "Status: %s"
 msgstr "நிலை: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "நிலை: நிறுவப்பட்டது"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "இயங்கும் தலைப்பை நிறுத்தி பட்டியலுக்குத் திரும்பு"
@@ -1583,3 +1583,4 @@ msgstr "Direct3D 12 பிழைத்திருத்த அடுக்க�
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll கிடைக்கவில்லை; Vulkan வரைகலை பின்தளத்துக்கு இது தேவை. இப்போது பதிவிறக்கவா (~20 MB)?"
+

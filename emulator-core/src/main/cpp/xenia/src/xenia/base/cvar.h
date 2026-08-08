@@ -53,6 +53,7 @@ class IConfigVar : virtual public ICommandVar {
   virtual bool is_advanced() const = 0;
   virtual bool is_transient() const = 0;
   virtual std::string config_value() const = 0;
+  virtual std::string default_value() const = 0;
   virtual std::string commandline_value() const = 0;
   virtual void LoadConfigValue(const toml::node* result) = 0;
   virtual void LoadGameConfigValue(const toml::node* result) = 0;
@@ -95,6 +96,7 @@ class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
                const char* display_name, const char* category, bool is_advanced,
                bool is_transient);
   std::string config_value() const override;
+  std::string default_value() const override;
   std::string commandline_value() const override;
   const T& GetTypedConfigValue() const;
   const std::string& category() const override;
@@ -305,6 +307,10 @@ std::string ConfigVar<T>::config_value() const {
   if (config_value_) {
     return this->ToString(*config_value_);
   }
+  return this->ToString(this->default_value_);
+}
+template <class T>
+std::string ConfigVar<T>::default_value() const {
   return this->ToString(this->default_value_);
 }
 template <class T>
@@ -653,7 +659,7 @@ class IConfigVarUpdate {
   // If you're reviewing a pull request with a change here, check if 1) has been
   // done by the submitter before merging.
   static constexpr uint32_t kLastCommittedUpdateDate =
-      MakeConfigVarUpdateDate(2026, 7, 24, 12);
+      MakeConfigVarUpdateDate(2026, 8, 1, 13);
 
   virtual ~IConfigVarUpdate() = default;
 

@@ -45,6 +45,11 @@ class GraphicsUploadBufferPool {
     virtual ~Page();
     uint64_t last_submission_index_;
     Page* next_;
+    // Bytes actually backing this page. page_size_ may grow after a page has
+    // been created (the Vulkan pool expands it to occupy allocation padding),
+    // and pages created before that are still only their original size, so
+    // offsets must be bounded by this rather than by the current page_size_.
+    size_t capacity_;
   };
 
   GraphicsUploadBufferPool(size_t page_size) : page_size_(page_size) {}

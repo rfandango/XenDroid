@@ -18,10 +18,35 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/thread_state.h"
 
+#include "xenia/base/profiling.h"
+
+#if XE_OPTION_PROFILING
+#include <vector>
+#endif
+
 namespace xe {
 namespace cpu {
 namespace backend {
 namespace x64 {
+
+#if XE_OPTION_PROFILING
+// Diagnostic: FTrace wired into microprofile. One scope per guest function,
+// keyed by guest address, so per-function guest CPU cost shows in the dump.
+// Only present when built with --enable-ftrace (the JIT emits the entry/return
+// hooks) and --enable-profiler.
+namespace {
+// Frame state lives in ThreadState (FunctionTraceState) so it follows a guest
+// thread across dispatch CPUs under the guest scheduler.
+//
+// microprofile's per-thread scope stack is MICROPROFILE_STACK_MAX (32) deep and
+// asserts on overflow. Guest call stacks go deeper, the GPU/kernel C++ scopes
+// share the same stack, and co-resident fibers all feed one dispatch thread's
+// stack, so cap per guest thread and per host thread.
+constexpr uint32_t kFtraceMaxDepth = 16;
+constexpr uint32_t kFtraceHostMaxDepth = 24;
+thread_local uint32_t t_ftrace_host_open = 0;
+}  // namespace
+#endif
 
 // Float/vector trace values arrive as a host pointer (emit sites lea the
 // address), keeping the calls GPR-only; __m128-by-value would mismatch the
@@ -126,12 +151,55 @@ void TraceFunctionEntry(void* raw_context, uint64_t function_address) {
       ppc_context->r[4], ppc_context->r[5], ppc_context->r[6],
       ppc_context->r[7], ppc_context->r[8], ppc_context->r[9],
       ppc_context->r[10]);
+#if XE_OPTION_PROFILING
+  auto* thread_state = ThreadState::Get();
+  if (thread_state) {
+    auto& ft = thread_state->function_trace_state();
+    uint32_t address = static_cast<uint32_t>(function_address);
+    bool profiled = ft.open_count < kFtraceMaxDepth &&
+                    t_ftrace_host_open < kFtraceHostMaxDepth;
+    MicroProfileToken token = 0;
+    uint64_t tick = 0;
+    if (profiled) {
+      token = GetGuestFunctionToken(address);
+      tick = MicroProfileEnter(token);
+      ++ft.open_count;
+      ++t_ftrace_host_open;
+    }
+    ft.stack.push_back({address, token, tick, profiled});
+  }
+#endif
 }
 void TraceFunctionReturn(void* raw_context, uint64_t function_address) {
   auto ppc_context = reinterpret_cast<ppc::PPCContext*>(raw_context);
   // Guest function return value (PPC r3).
   FPRINT("ret  {:08X} = {:X}\n", static_cast<uint32_t>(function_address),
          ppc_context->r[3]);
+#if XE_OPTION_PROFILING
+  // Pop to the matching frame, closing any intermediate frames skipped by tail
+  // calls so the microprofile stack stays balanced.
+  auto* thread_state = ThreadState::Get();
+  if (thread_state) {
+    auto& ft = thread_state->function_trace_state();
+    uint32_t address = static_cast<uint32_t>(function_address);
+    while (!ft.stack.empty()) {
+      FunctionTraceFrame frame = ft.stack.back();
+      ft.stack.pop_back();
+      if (frame.profiled) {
+        MicroProfileLeave(frame.token, frame.tick);
+        --ft.open_count;
+        // The enter may have run on another dispatch thread before a
+        // migration.
+        if (t_ftrace_host_open) {
+          --t_ftrace_host_open;
+        }
+      }
+      if (frame.address == address) {
+        break;
+      }
+    }
+  }
+#endif
 }
 
 void TraceString(void* raw_context, const char* str) {

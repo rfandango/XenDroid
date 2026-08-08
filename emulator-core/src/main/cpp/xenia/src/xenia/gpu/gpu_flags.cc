@@ -10,7 +10,27 @@
 #include "xenia/gpu/gpu_flags.h"
 
 #include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
 #include "xenia/ui/renderdoc_api.h"
+
+// Unified-memory hosts (Apple Silicon, Windows on ARM) benefit from aliasing
+// guest RAM directly. x86-64 hosts are overwhelmingly discrete, where it is
+// slow, so default off there.
+#if XE_ARCH_ARM64
+#define XE_GPU_ZERO_COPY_DEFAULT true
+#else
+#define XE_GPU_ZERO_COPY_DEFAULT false
+#endif
+DEFINE_bool(
+    shared_memory_zero_copy, XE_GPU_ZERO_COPY_DEFAULT,
+    "Alias guest RAM directly as the GPU shared-memory buffer instead "
+    "of uploading dirty pages each frame. Removes upload copies and "
+    "keeps memexport and resolve output coherent with the CPU for free. "
+    "Default on for ARM64 (unified-memory) builds, off for x86-64. "
+    "Turn off on discrete GPUs, where shared-memory fetches cross PCIe "
+    "and are slow.",
+    "GPU");
+#undef XE_GPU_ZERO_COPY_DEFAULT
 
 DEFINE_bool(use_50Hz_mode, false, "Enables usage of PAL-50 mode.", "Console");
 
@@ -32,10 +52,13 @@ DEFINE_bool(guest_display_refresh_cap, true,
             "GPU");
 
 DEFINE_uint32(
-    framerate_limit, 0,
+    framerate_limit, 60,
     "Host frame rate limit in FPS. 0 = unlimited.\n"
     "Throttles presentation without affecting guest vblank timing.\n"
-    "Guest vblanks are controlled by use_50Hz_mode (50Hz PAL, 60Hz NTSC).",
+    "Guest vblanks are controlled by use_50Hz_mode (50Hz PAL, 60Hz NTSC).\n"
+    "Defaults to 60 here rather than unlimited: the console never presented "
+    "faster, and on a handheld the frames past the panel's refresh are heat "
+    "and battery for no visible gain.",
     "GPU");
 
 void SetGuestDisplayRefreshCap(bool value) {
@@ -183,6 +206,33 @@ DEFINE_bool(
     "created synchronously which causes stutter but no visual artifacts.",
     "GPU");
 
+DEFINE_bool(async_shader_vs_interpreter, true,
+            "Render new vertex shaders with the ucode interpreter while they "
+            "translate and compile in the background, instead of stalling on "
+            "translation. Requires async_shader_compilation.",
+            "GPU");
+DEFINE_bool(
+    async_shader_vs_interpreter_debug_color, false,
+    "Draw ucode interpreter VS placeholders with a flat grey pixel "
+    "shader so the interim geometry is visible (host render target path "
+    "only). Requires async_shader_vs_interpreter.",
+    "GPU");
+DEFINE_bool(
+    async_shader_skip_draws, true,
+    "Skip draws whose shaders can't render immediately via a placeholder "
+    "(no interpreter stand-in, e.g. tessellation or textured/memexport/loop "
+    "vertex shaders) until their real pipeline compiles in the background, "
+    "instead of translating them on the draw thread. Avoids stutter but the "
+    "geometry pops in a few frames later.",
+    "GPU");
+
+DEFINE_bool(
+    shader_profiling, false,
+    "Log shader translation and host pipeline (PSO) creation timings, tagged "
+    "with 'shader_profiling:'. Off by default because it logs per shader and "
+    "per pipeline.",
+    "GPU");
+
 DEFINE_bool(
     readback_resolve_half_pixel_offset, false,
     "When resolution scaling is active, sample from the center of each scaled "
@@ -190,6 +240,12 @@ DEFINE_bool(
     "improve image quality in some cases but can break games that rely on "
     "reading back specific pixel values (e.g., for gamma detection).",
     "GPU");
+
+DEFINE_bool(readback_resolve_sync, true,
+            "Stall the GPU after each readback_resolve copy so guest RAM is "
+            "coherent in "
+            "the same frame, instead of copying asynchronously.",
+            "GPU");
 
 DEFINE_bool(gpu_3d_to_2d_texture, true,
             "Handle shaders that sample 3D textures as 2D by creating a 2D "
@@ -214,3 +270,12 @@ DEFINE_bool(use_fuzzy_alpha_epsilon, false,
             "Use approximate compare for alpha values to prevent flickering on "
             "NVIDIA graphics cards",
             "GPU");
+
+DEFINE_bool(
+    texture_gradient_exp_bias, false,
+    "Apply the per-axis gradient exponent biases (LodBiasH/V, word 4 of the "
+    "fetch constant) when sampling with computed gradients. The biases are zero "
+    "in most games, and honoring them costs a handful of integer ops plus two "
+    "multiplies in every gradient texture fetch, which is measurable where "
+    "fragment shading is the bottleneck.",
+    "GPU");

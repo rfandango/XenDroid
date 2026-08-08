@@ -132,12 +132,6 @@ void GameLibrary::Load() {
       }
     }
 
-    if (entry.paths.empty()) {
-      XELOGW("GameLibrary: no usable paths, skipping {}",
-             xe::path_to_utf8(game_toml));
-      continue;
-    }
-
     NormalizeDefault(entry);
     entries_.push_back(std::move(entry));
   }
@@ -196,11 +190,6 @@ bool GameLibrary::WriteEntryAtomic(const LibraryEntry& entry) {
 }
 
 bool GameLibrary::Upsert(LibraryEntry entry) {
-  if (entry.paths.empty()) {
-    XELOGW("GameLibrary: refusing to store {:08X} with no paths",
-           entry.title_id);
-    return false;
-  }
   NormalizeDefault(entry);
 
   if (!WriteEntryAtomic(entry)) {
@@ -239,6 +228,66 @@ bool GameLibrary::AddDisc(uint32_t title_id, const std::string& name,
 
   entry.paths.push_back({path, label, false});
   return Upsert(std::move(entry));
+}
+
+bool GameLibrary::SetDefaultPath(uint32_t title_id,
+                                 const std::filesystem::path& path) {
+  auto* existing = Find(title_id);
+  if (!existing) {
+    return false;
+  }
+  const bool present =
+      std::any_of(existing->paths.begin(), existing->paths.end(),
+                  [&](const LibraryPath& p) { return p.path == path; });
+  if (!present) {
+    return false;
+  }
+  if (existing->default_path().path == path) {
+    return true;  // already default, skip the rewrite
+  }
+
+  LibraryEntry entry = *existing;
+  for (auto& p : entry.paths) {
+    p.is_default = (p.path == path);
+  }
+  return Upsert(std::move(entry));
+}
+
+bool GameLibrary::RemovePath(uint32_t title_id,
+                             const std::filesystem::path& path) {
+  auto* existing = Find(title_id);
+  if (!existing) {
+    return false;
+  }
+  auto it = std::find_if(existing->paths.begin(), existing->paths.end(),
+                         [&](const LibraryPath& p) { return p.path == path; });
+  if (it == existing->paths.end()) {
+    return false;
+  }
+  LibraryEntry entry = *existing;
+  entry.paths.erase(entry.paths.begin() +
+                    std::distance(existing->paths.begin(), it));
+  return Upsert(std::move(entry));  // picks a new default if needed
+}
+
+bool GameLibrary::PruneMissingPaths(uint32_t title_id) {
+  auto* existing = Find(title_id);
+  if (!existing) {
+    return false;
+  }
+  LibraryEntry entry = *existing;
+  const size_t before = entry.paths.size();
+  std::error_code ec;
+  entry.paths.erase(std::remove_if(entry.paths.begin(), entry.paths.end(),
+                                   [&](const LibraryPath& p) {
+                                     return !std::filesystem::exists(p.path,
+                                                                     ec);
+                                   }),
+                    entry.paths.end());
+  if (entry.paths.size() == before) {
+    return false;
+  }
+  return Upsert(std::move(entry));  // picks a new default if needed
 }
 
 bool GameLibrary::SetIcon(uint32_t title_id, std::span<const uint8_t> png) {

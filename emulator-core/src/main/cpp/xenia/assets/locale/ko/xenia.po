@@ -113,10 +113,6 @@ msgstr "보기(&V)"
 msgid "&Volume"
 msgstr "음량(&V)"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(설치됨) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(알 수 없는 게임)"
@@ -963,6 +959,14 @@ msgstr "프로필을 찾을 수 없음"
 msgid "No file path is set for this title."
 msgstr "이 게임에 대한 파일 경로가 설정되지 않았습니다."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "게임을 찾을 수 없습니다."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "새 게임을 찾을 수 없습니다."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1315,10 +1319,6 @@ msgstr "상태"
 msgid "Status: %s"
 msgstr "상태: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "상태: 설치됨"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "실행 중인 게임을 중지하고 목록으로 돌아가기"
@@ -1581,3 +1581,4 @@ msgstr "Direct3D 12 디버그 레이어를 설치했지만 자동으로 다시 �
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll을 찾을 수 없습니다. Vulkan 그래픽 백엔드에 필요합니다. 지금 다운로드할까요 (~20 MB)?"
+

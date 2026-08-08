@@ -35,15 +35,15 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
 
   // For pixel shaders with resolution scaling, only allow memory export from
   // the center host pixel to avoid duplicate exports.
-  if (is_pixel_shader() &&
-      (draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1)) {
+  if (is_pixel_shader() && (GetCurrentDrawResolutionScaleX() > 1 ||
+                            GetCurrentDrawResolutionScaleY() > 1)) {
     assert_true(input_fragment_coordinates_ != spv::NoResult);
 
     // Check if we're at the center pixel (scale/2 for both X and Y).
     spv::Id is_center_pixel = builder_->makeBoolConstant(true);
 
     // Check X coordinate.
-    if (draw_resolution_scale_x_ > 1) {
+    if (GetCurrentDrawResolutionScaleX() > 1) {
       id_vector_temp_.clear();
       id_vector_temp_.push_back(const_int_0_);
       spv::Id pixel_x = builder_->createUnaryOp(
@@ -55,16 +55,16 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
               spv::NoPrecision));
       spv::Id pixel_x_remainder = builder_->createBinOp(
           spv::OpUMod, type_uint_, pixel_x,
-          builder_->makeUintConstant(draw_resolution_scale_x_));
+          builder_->makeUintConstant(GetCurrentDrawResolutionScaleX()));
       is_center_pixel = builder_->createBinOp(
           spv::OpLogicalAnd, type_bool_, is_center_pixel,
-          builder_->createBinOp(
-              spv::OpIEqual, type_bool_, pixel_x_remainder,
-              builder_->makeUintConstant(draw_resolution_scale_x_ >> 1)));
+          builder_->createBinOp(spv::OpIEqual, type_bool_, pixel_x_remainder,
+                                builder_->makeUintConstant(
+                                    GetCurrentDrawResolutionScaleX() >> 1)));
     }
 
     // Check Y coordinate.
-    if (draw_resolution_scale_y_ > 1) {
+    if (GetCurrentDrawResolutionScaleY() > 1) {
       id_vector_temp_.clear();
       id_vector_temp_.push_back(builder_->makeIntConstant(1));
       spv::Id pixel_y = builder_->createUnaryOp(
@@ -76,12 +76,12 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
               spv::NoPrecision));
       spv::Id pixel_y_remainder = builder_->createBinOp(
           spv::OpUMod, type_uint_, pixel_y,
-          builder_->makeUintConstant(draw_resolution_scale_y_));
+          builder_->makeUintConstant(GetCurrentDrawResolutionScaleY()));
       is_center_pixel = builder_->createBinOp(
           spv::OpLogicalAnd, type_bool_, is_center_pixel,
-          builder_->createBinOp(
-              spv::OpIEqual, type_bool_, pixel_y_remainder,
-              builder_->makeUintConstant(draw_resolution_scale_y_ >> 1)));
+          builder_->createBinOp(spv::OpIEqual, type_bool_, pixel_y_remainder,
+                                builder_->makeUintConstant(
+                                    GetCurrentDrawResolutionScaleY() >> 1)));
     }
 
     // Combine with existing memexport_allowed condition.
@@ -111,23 +111,25 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   }
 
   // Check if the address with the correct sign and exponent was written, and
-  // that the index doesn't overflow the mantissa bits.
-  // all((eA_vector >> uvec4(30, 23, 23, 23)) == uvec4(0x1, 0x96, 0x96, 0x96))
+  // that the index doesn't overflow the mantissa bits. Z takes all 12 bits of
+  // const_0x4b0 rather than the top 9, so the constants the shader accepts
+  // match the ones draw_util::AddMemExportRanges derives ranges from.
+  // all((eA_vector >> uvec4(30, 23, 20, 23)) == uvec4(0x1, 0x96, 0x4B0, 0x96))
   spv::Id eA_vector = builder_->createUnaryOp(
       spv::OpBitcast, type_uint4_,
       builder_->createLoad(var_main_memexport_address_, spv::NoPrecision));
   id_vector_temp_.clear();
   id_vector_temp_.push_back(builder_->makeUintConstant(30));
   id_vector_temp_.push_back(builder_->makeUintConstant(23));
-  id_vector_temp_.push_back(id_vector_temp_.back());
-  id_vector_temp_.push_back(id_vector_temp_.back());
+  id_vector_temp_.push_back(builder_->makeUintConstant(20));
+  id_vector_temp_.push_back(builder_->makeUintConstant(23));
   spv::Id address_validation_shift =
       builder_->makeCompositeConstant(type_uint4_, id_vector_temp_);
   id_vector_temp_.clear();
   id_vector_temp_.push_back(builder_->makeUintConstant(0x1));
   id_vector_temp_.push_back(builder_->makeUintConstant(0x96));
-  id_vector_temp_.push_back(id_vector_temp_.back());
-  id_vector_temp_.push_back(id_vector_temp_.back());
+  id_vector_temp_.push_back(builder_->makeUintConstant(0x4B0));
+  id_vector_temp_.push_back(builder_->makeUintConstant(0x96));
   spv::Id address_validation_value =
       builder_->makeCompositeConstant(type_uint4_, id_vector_temp_);
   SpirvBuilder::IfBuilder if_address_valid(

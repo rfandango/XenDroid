@@ -430,7 +430,11 @@ struct RESERVED_LOAD_INT32
     // we will do a load first, but we'll need exclusive access once we do our
     // atomic op in the store
     e.prefetchw(e.ptr[e.rax]);
-    e.mov(e.ecx, i.src1.reg().cvt32());
+    if (i.src1.is_constant) {
+      e.mov(e.ecx, static_cast<uint32_t>(i.src1.constant()));
+    } else {
+      e.mov(e.ecx, i.src1.reg().cvt32());
+    }
     e.call(e.backend()->try_acquire_reservation_helper_);
     e.mov(i.dest, e.dword[e.rax]);
 
@@ -445,14 +449,18 @@ struct RESERVED_LOAD_INT64
   static void Emit(X64Emitter& e, const EmitArgType& i) {
     // try_acquire_reservation_helper_ doesnt spoil rax
     e.lea(e.rax, e.ptr[ComputeMemoryAddress(e, i.src1)]);
-    e.mov(e.ecx, i.src1.reg().cvt32());
+    if (i.src1.is_constant) {
+      e.mov(e.ecx, static_cast<uint32_t>(i.src1.constant()));
+    } else {
+      e.mov(e.ecx, i.src1.reg().cvt32());
+    }
     // begin acquiring exclusive access to the location
     // we will do a load first, but we'll need exclusive access once we do our
     // atomic op in the store
     e.prefetchw(e.ptr[e.rax]);
 
     e.call(e.backend()->try_acquire_reservation_helper_);
-    e.mov(i.dest, e.qword[ComputeMemoryAddress(e, i.src1)]);
+    e.mov(i.dest, e.qword[e.rax]);
 
     e.mov(
         e.GetBackendCtxPtr(offsetof(X64BackendContext, cached_reserve_value_)),
@@ -469,13 +477,21 @@ struct RESERVED_STORE_INT32
     : Sequence<RESERVED_STORE_INT32,
                I<OPCODE_RESERVED_STORE, I8Op, I64Op, I32Op>> {
   static void Emit(X64Emitter& e, const EmitArgType& i) {
-    // edx=guest addr
+    // ecx = guest addr
     // r9 = host addr
     // r8 = value
-    // if ZF is set and CF is set, we succeeded
-    e.mov(e.ecx, i.src1.reg().cvt32());
+    // if ZF is set, we succeeded
+    if (i.src1.is_constant) {
+      e.mov(e.ecx, static_cast<uint32_t>(i.src1.constant()));
+    } else {
+      e.mov(e.ecx, i.src1.reg().cvt32());
+    }
     e.lea(e.r9, e.ptr[ComputeMemoryAddress(e, i.src1)]);
-    e.mov(e.r8d, i.src2);
+    if (i.src2.is_constant) {
+      e.mov(e.r8d, static_cast<uint32_t>(i.src2.constant()));
+    } else {
+      e.mov(e.r8d, i.src2);
+    }
     e.call(e.backend()->reserved_store_32_helper);
     e.setz(i.dest);
   }
@@ -485,9 +501,17 @@ struct RESERVED_STORE_INT64
     : Sequence<RESERVED_STORE_INT64,
                I<OPCODE_RESERVED_STORE, I8Op, I64Op, I64Op>> {
   static void Emit(X64Emitter& e, const EmitArgType& i) {
-    e.mov(e.ecx, i.src1.reg().cvt32());
+    if (i.src1.is_constant) {
+      e.mov(e.ecx, static_cast<uint32_t>(i.src1.constant()));
+    } else {
+      e.mov(e.ecx, i.src1.reg().cvt32());
+    }
     e.lea(e.r9, e.ptr[ComputeMemoryAddress(e, i.src1)]);
-    e.mov(e.r8, i.src2);
+    if (i.src2.is_constant) {
+      e.mov(e.r8, static_cast<uint64_t>(i.src2.constant()));
+    } else {
+      e.mov(e.r8, i.src2);
+    }
     e.call(e.backend()->reserved_store_64_helper);
     e.setz(i.dest);
   }
@@ -1994,6 +2018,15 @@ struct MEMORY_BARRIER
   static void Emit(X64Emitter& e, const EmitArgType& i) { e.mfence(); }
 };
 EMITTER_OPCODE_TABLE(OPCODE_MEMORY_BARRIER, MEMORY_BARRIER);
+
+// ============================================================================
+// OPCODE_LOAD_BARRIER
+// ============================================================================
+struct LOAD_BARRIER : Sequence<LOAD_BARRIER, I<OPCODE_LOAD_BARRIER, VoidOp>> {
+  // x86 never reorders a load with a later access, so nothing to emit.
+  static void Emit(X64Emitter& e, const EmitArgType& i) {}
+};
+EMITTER_OPCODE_TABLE(OPCODE_LOAD_BARRIER, LOAD_BARRIER);
 
 // ============================================================================
 // OPCODE_MEMSET

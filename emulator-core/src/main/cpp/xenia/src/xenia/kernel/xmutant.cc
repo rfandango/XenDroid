@@ -11,6 +11,7 @@
 
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/logging.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/memory.h"
@@ -65,19 +66,19 @@ XMutant::XMutant() : XObject(kObjectType) {}
 XMutant::~XMutant() = default;
 
 void XMutant::Initialize(bool initial_owner) {
-  assert_false(mutant_);
+  assert_false(free_signal_);
 
   // Skip on the Restore path -- RestoreObject already populated guest_object_.
   if (guest_object() == 0) {
     CreateNative<X_KMUTANT>();
     auto* kmutant = memory()->TranslateVirtual<X_KMUTANT*>(guest_object());
     // Don't touch header.wait_list: SetNativePointer stashes the handle there.
-    kmutant->header.type = 2;  // DISPATCHER_MUTANT
+    kmutant->header.type = X_DISPATCHER_FLAGS::DISPATCHER_MUTANT;
     kmutant->header.signal_state = initial_owner ? 0 : 1;
   }
 
-  mutant_ = xe::threading::Mutant::Create(initial_owner);
-  assert_not_null(mutant_);
+  free_signal_ = xe::threading::Semaphore::Create(initial_owner ? 0 : 1, 1);
+  assert_not_null(free_signal_);
 
   if (initial_owner) {
     // Initial-owner acquire doesn't go through Wait, so link the chain here.
@@ -90,24 +91,22 @@ void XMutant::Initialize(bool initial_owner) {
   }
 }
 
-void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
-  assert_false(mutant_);
+void XMutant::InitializeNative(void* native_ptr,
+                               const X_DISPATCH_HEADER* header) {
+  assert_false(free_signal_);
 
   auto* kmutant = reinterpret_cast<X_KMUTANT*>(native_ptr);
   // signal_state: 1 free, 0 held once, negative for recursive holds.
   int32_t signal_state = kmutant->header.signal_state;
   bool initial_owner = signal_state <= 0;
-  mutant_ = xe::threading::Mutant::Create(initial_owner);
-  assert_not_null(mutant_);
+  free_signal_ = xe::threading::Semaphore::Create(initial_owner ? 0 : 1, 1);
+  assert_not_null(free_signal_);
   SetNativePointer(memory()->HostToGuestVirtual(native_ptr), true);
 
   if (initial_owner) {
     // Recover the owner XThread from the stashed handle in its KTHREAD
     // dispatch header (same trick as GetNativeObject); current thread is the
     // fallback if the stash isn't where we expect.
-    // Caveat: if signal_state < 0 we set recursion to match, but the host
-    // primitive's count is only 1. Game releases past the first would hit
-    // host NOT_OWNED. Would need Wait()-up-recursion to fix.
     recursion_count_ = static_cast<uint32_t>(1 - signal_state);
     XThread* owner = nullptr;
     if (!!kmutant->owner) {
@@ -137,26 +136,28 @@ X_STATUS XMutant::ReleaseMutant(uint32_t priority_increment, bool abandon,
   // TODO(benvanik): abandoning.
   assert_false(abandon);
 
-  // Update ownership before mutant_->Release(): a waiter that acquires on
-  // another thread between the host release and our clear would get stranded
-  // with a null owning_thread_.
-  if (owning_thread_ == XThread::GetCurrentThread()) {
-    --recursion_count_;
-    if (recursion_count_ == 0) {
-      owning_thread_ = nullptr;
-      RemoveMutantOwned(memory(), this);
-    }
-    auto& signal_state = memory()
-                             ->TranslateVirtual<X_KMUTANT*>(guest_object())
-                             ->header.signal_state;
-    signal_state = signal_state + 1;
-  }
-
-  if (mutant_->Release()) {
-    return X_STATUS_SUCCESS;
-  } else {
+  // Guest ownership decides, not the host primitive, so a release from the
+  // wrong guest thread is rejected even when both share a dispatch thread.
+  XThread* self = XThread::IsInThread() ? XThread::GetCurrentThread() : nullptr;
+  if (!self || owning_thread_.load() != self) {
     return X_STATUS_MUTANT_NOT_OWNED;
   }
+
+  --recursion_count_;
+  auto& signal_state = memory()
+                           ->TranslateVirtual<X_KMUTANT*>(guest_object())
+                           ->header.signal_state;
+  signal_state = signal_state + 1;
+
+  if (recursion_count_ == 0) {
+    // Clear ownership before signaling, or a waiter that acquires on another
+    // host thread would be stranded with a null owning_thread_.
+    owning_thread_ = nullptr;
+    RemoveMutantOwned(memory(), this);
+    free_signal_->Release(1, nullptr);
+    WakeCooperativeWaiters();
+  }
+  return X_STATUS_SUCCESS;
 }
 
 bool XMutant::Save(ByteStream* stream) {
@@ -198,9 +199,8 @@ object_ref<XMutant> XMutant::Restore(KernelState* kernel_state,
 }
 
 void XMutant::AbandonAllOwnedByThread(KernelState* ks, XThread* thread) {
-  // The host mutex is left to the OS: when |thread|'s host thread exits, it
-  // is released with WAIT_ABANDONED which our wait path maps to
-  // X_STATUS_ABANDONED_WAIT_0.
+  // Released here rather than left to the OS, since a fiber-backed thread has
+  // no host-thread exit to abandon the primitive for it.
   auto* memory = ks->memory();
   uint32_t kthread_addr = thread->guest_object();
   if (!kthread_addr) {
@@ -215,20 +215,43 @@ void XMutant::AbandonAllOwnedByThread(KernelState* ks, XThread* thread) {
     uint32_t next = kmutant->unk_list.flink_ptr;
     kmutant->abandoned = 1;
     kmutant->owner = 0u;
+    // Back to free, however deep the abandoned holder's recursion was.
+    kmutant->header.signal_state = 1;
     kmutant->unk_list.flink_ptr = 0;
     kmutant->unk_list.blink_ptr = 0;
     if (kmutant->header.wait_list.flink_ptr == kXObjSignature) {
       auto obj = ks->object_table()->LookupObject<XMutant>(
           kmutant->header.wait_list.blink_ptr);
-      if (obj) {
-        obj->owning_thread_ = nullptr;
+      if (obj && obj->owning_thread_.exchange(nullptr)) {
+        // Only the thread that held it releases, however deep its recursion.
         obj->recursion_count_ = 0;
+        obj->free_signal_->Release(1, nullptr);
+        obj->WakeCooperativeWaiters();
       }
     }
     entry = next;
   }
   kthread->mutants_list.flink_ptr = head_addr;
   kthread->mutants_list.blink_ptr = head_addr;
+}
+
+bool XMutant::IsReenteredByCurrentThread() {
+  // GetCurrentThread asserts on the host threads that wait on a guest mutant
+  // during teardown, so gate on IsInThread like the wait path does.
+  if (!XThread::IsInThread()) {
+    return false;
+  }
+  XThread* owner = owning_thread_.load();
+  return owner && owner == XThread::GetCurrentThread();
+}
+
+X_STATUS XMutant::AcquireStatus() {
+  auto* kmutant = memory()->TranslateVirtual<X_KMUTANT*>(guest_object());
+  if (kmutant->abandoned) {
+    kmutant->abandoned = 0;
+    return X_STATUS_ABANDONED_WAIT_0;
+  }
+  return X_STATUS_SUCCESS;
 }
 
 void XMutant::WaitCallback() {
@@ -247,6 +270,21 @@ void XMutant::WaitCallback() {
                            ->TranslateVirtual<X_KMUTANT*>(guest_object())
                            ->header.signal_state;
   signal_state = signal_state - 1;
+}
+
+void XMutant::CooperativeWaitBegin(XThread* thread) { waiters_.Add(thread); }
+
+void XMutant::CooperativeWaitEnd(XThread* thread) {
+  // Poke the new front so it re-polls now.
+  if (waiters_.Remove(thread)) {
+    WakeCooperativeWaiters();
+  }
+}
+
+bool XMutant::CooperativeMayAcquire(XThread* thread) {
+  // The owner bypasses the queue so a recursive acquire cannot self-deadlock
+  // behind its own waiters.
+  return owning_thread_.load() == thread || waiters_.MayAcquire(thread);
 }
 
 }  // namespace kernel

@@ -645,6 +645,22 @@ void SpirvShaderTranslator::CompleteFragmentShaderInMain() {
             block_rt_0_alpha_tests_rt_written_head->getId());
         main_fsi_sample_mask_ =
             builder_->createOp(spv::OpPhi, type_uint_, id_vector_temp_);
+      } else if (edram_fragment_shader_interlock_) {
+        // Demote path: the alpha test demotes instead of touching the mask, but
+        // alpha to coverage still modified main_fsi_sample_mask_ inside the
+        // written branch. Merge in the pre-branch mask
+        // (fsi_sample_mask_in_rt_0_alpha_tests) on the not-written edge so the
+        // value dominates the merge. Otherwise it is undefined there (invalid
+        // SPIR-V dominance and garbage coverage).
+        id_vector_temp_.clear();
+        id_vector_temp_.push_back(main_fsi_sample_mask_);
+        id_vector_temp_.push_back(
+            block_rt_0_alpha_tests_rt_written_end.getId());
+        id_vector_temp_.push_back(fsi_sample_mask_in_rt_0_alpha_tests);
+        id_vector_temp_.push_back(
+            block_rt_0_alpha_tests_rt_written_head->getId());
+        main_fsi_sample_mask_ =
+            builder_->createOp(spv::OpPhi, type_uint_, id_vector_temp_);
       }
     }
   }
@@ -1272,7 +1288,8 @@ void SpirvShaderTranslator::CompleteFragmentShaderInMain() {
             const_uint_0_);
         SpirvBuilder::IfBuilder if_gamma(
             is_gamma, spv::SelectionControlDontFlattenMask, *builder_);
-        spv::Id color_rgb_gamma = LinearToPWLGamma(color_rgb, false);
+        spv::Id color_rgb_gamma = SpirvShaderTranslator::LinearToPWLGamma(
+            builder_.get(), color_rgb, false, ext_inst_glsl_std_450_);
         if_gamma.makeEndIf();
         color_rgb = if_gamma.createMergePhi(color_rgb_gamma, color_rgb);
         {
@@ -1741,12 +1758,12 @@ void SpirvShaderTranslator::FSI_LoadSampleMask(spv::Id msaa_samples) {
                                 input_sample_mask_value),
         builder_->makeUintConstant(32 - 2));
   } else {
-    // 0 and 3 to 0 and 1.
+    // 0 and 3 to 0 and 1 - guest sample 1 comes from host sample 3
     sample_mask_2x = builder_->createQuadOp(
         spv::OpBitFieldInsert, type_uint_, input_sample_mask_value,
         builder_->createTriOp(spv::OpBitFieldUExtract, type_uint_,
-                              input_sample_mask_value, const_uint_2,
-                              const_uint_1),
+                              input_sample_mask_value,
+                              builder_->makeUintConstant(3), const_uint_1),
         const_uint_1, builder_->makeUintConstant(32 - 1));
   }
   builder_->createBranch(&block_msaa_merge);
@@ -2922,10 +2939,11 @@ std::array<spv::Id, 2> SpirvShaderTranslator::FSI_ClampAndPackColor(
     uint_vector_temp_.push_back(2);
     spv::Id color_rgb = builder_->createRvalueSwizzle(
         spv::NoPrecision, type_float3_, color_float4, uint_vector_temp_);
-    spv::Id rgb_gamma = LinearToPWLGamma(
+    spv::Id rgb_gamma = SpirvShaderTranslator::LinearToPWLGamma(
+        builder_.get(),
         builder_->createRvalueSwizzle(spv::NoPrecision, type_float3_,
                                       color_float4, uint_vector_temp_),
-        false);
+        false, ext_inst_glsl_std_450_);
     spv::Id alpha_clamped = builder_->createTriBuiltinCall(
         type_float_, ext_inst_glsl_std_450_, GLSLstd450NClamp,
         builder_->createCompositeExtract(color_float4, type_float_, 3),
@@ -3277,7 +3295,8 @@ std::array<spv::Id, 4> SpirvShaderTranslator::FSI_UnpackColor(
                     builder_->makeUintConstant(8 * j), component_width)),
             component_scale);
         if (i && j <= 2) {
-          component = PWLGammaToLinear(component, true);
+          component = SpirvShaderTranslator::PWLGammaToLinear(
+              builder_.get(), component, true, ext_inst_glsl_std_450_);
         }
         unpacked_8_8_8_8_and_gamma[i][j] = component;
       }
@@ -4398,8 +4417,11 @@ void SpirvShaderTranslator::FSI_AlphaToMask() {
     FSI_AlphaToMaskSample(false, 1, 1.0f, threshold_offset, 1.0f / 8.0f, alpha,
                           coverage_2x);
   } else {
-    // FBO: Account for native 2x vs 2x-as-4x sample mapping.
-    if (native_2x_msaa_no_attachments_) {
+    // FBO: Account for native 2x vs 2x-as-4x sample mapping. This epilogue only
+    // runs when there is a color attachment (sample mask output), so the native
+    // 2x decision must use the with-attachments capability, matching the host
+    // pipeline's native-vs-emulated 2x choice.
+    if (native_2x_msaa_with_attachments_) {
       // Native 2x: D3D10.1+ standard - top is 1, bottom is 0.
       FSI_AlphaToMaskSample(true, 1, 0.5f, threshold_offset, 1.0f / 8.0f, alpha,
                             coverage_2x);

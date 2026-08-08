@@ -252,6 +252,13 @@ bool SpinLoopBackoffPass::TryCollapseLoop(HIRBuilder* builder, Block* block) {
       delays.push_back(instr);
       continue;
     }
+    if (op == &OPCODE_CHECK_PREEMPT_info) {
+      // A safepoint marker with no data effect. PreemptCheckInjectionPass
+      // puts one at the head of every loop, so rejecting it here silently
+      // disabled this collapse whenever the cooperative scheduler was on.
+      // Collapsing removes the loop and the safepoint with it.
+      continue;
+    }
     if (op == &OPCODE_LOAD_CONTEXT_info) {
       if (load_ctr || instr->src1.offset != kCtrOffset ||
           instr->dest->type != INT64_TYPE) {

@@ -130,3 +130,7 @@
 [submodule "third_party/boost_context/context"]
 	path = third_party/boost_context/context
 	url = https://github.com/boostorg/context.git
+[submodule "third_party/mesa"]
+	path = third_party/mesa
+	url = https://gitlab.freedesktop.org/has207/mesa.git
+	ignore = dirty

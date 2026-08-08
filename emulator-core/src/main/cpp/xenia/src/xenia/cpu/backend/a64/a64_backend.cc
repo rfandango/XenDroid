@@ -14,6 +14,7 @@
 
 #include "xenia/base/assert.h"
 #include "xenia/base/atomic.h"
+#include "xenia/base/byte_order.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/exception_handler.h"
 #include "xenia/base/logging.h"
@@ -498,9 +499,9 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
 }
 
 // ==========================================================================
-// Reservation helpers — implement PPC lwarx/stwcx semantics with a global
-// per-cache-line bitmap so cross-thread stores invalidate other threads'
-// reservations (data-based CAS alone is ABA-vulnerable).
+// Reservation helpers. A global per-granule generation counter so
+// cross-thread stores invalidate other threads' reservations. A CAS on the
+// value alone would be ABA-vulnerable.
 // ==========================================================================
 namespace {
 
@@ -509,46 +510,33 @@ A64BackendContext* BackendContextFromRawContext(void* raw_context) {
       reinterpret_cast<uint8_t*>(raw_context) - sizeof(A64BackendContext));
 }
 
-void ReserveOffsetAndBit(ReserveHelper* reserve_helper, uint32_t guest_address,
-                         volatile uint64_t*& out_block, uint32_t& out_bit) {
-  const uint32_t block_idx = guest_address >> A64_RESERVE_BLOCK_SHIFT;
-  out_block = &reserve_helper->blocks[block_idx >> 6];
-  out_bit = block_idx & 63;
+std::atomic<uint32_t>& ReserveGranule(ReserveHelper* reserve_helper,
+                                      uint32_t guest_address) {
+  const uint32_t granule = guest_address >> A64_RESERVE_GRANULE_SHIFT;
+  return reserve_helper->generations[granule & A64_RESERVE_ENTRY_MASK];
 }
 
 extern "C" uint64_t TryAcquireReservationHelper(void* raw_context,
                                                 uint64_t guest_address) {
   auto* bctx = BackendContextFromRawContext(raw_context);
-  const uint32_t reserve_flag = 1u << kA64BackendHasReserveBit;
-  // PPC lwarx implicitly drops any prior reservation.
-  bctx->flags &= ~reserve_flag;
+  auto& granule =
+      ReserveGranule(bctx->reserve_helper_, uint32_t(guest_address));
+  // snapshot the generation first, the acquire pins the value read after
+  bctx->reserve_generation = granule.load(std::memory_order_acquire);
+  bctx->reserve_address = uint32_t(guest_address);
+  // lwarx replaces any reservation this thread already held
+  bctx->flags |= 1u << kA64BackendHasReserveBit;
+  return 1;
+}
 
-  volatile uint64_t* block;
-  uint32_t bit;
-  ReserveOffsetAndBit(bctx->reserve_helper_, uint32_t(guest_address), block,
-                      bit);
-  const uint64_t mask = uint64_t(1) << bit;
-
-  bool acquired = false;
-  while (true) {
-    const uint64_t old = *block;
-    if (old & mask) {
-      // Another thread already holds the reservation.
-      break;
-    }
-    if (xe::atomic_cas(old, old | mask,
-                       reinterpret_cast<volatile uint64_t*>(block))) {
-      acquired = true;
-      break;
-    }
-  }
-
-  bctx->cached_reserve_offset = reinterpret_cast<uintptr_t>(block);
-  bctx->cached_reserve_bit = bit;
-  if (acquired) {
-    bctx->flags |= reserve_flag;
-  }
-  return acquired ? 1 : 0;
+template <typename T>
+T ReservedLoadImpl(ppc::PPCContext* context, uint32_t address) {
+  T* host_address = context->TranslateVirtual<T*>(address);
+  TryAcquireReservationHelper(context, address);
+  auto* bctx = BackendContextFromRawContext(context);
+  const T raw = *host_address;
+  bctx->cached_reserve_value_ = static_cast<uint64_t>(raw);
+  return xe::byte_swap(raw);
 }
 
 template <typename T>
@@ -557,20 +545,17 @@ uint64_t ReservedStoreImpl(void* raw_context, uint64_t guest_address,
   auto* bctx = BackendContextFromRawContext(raw_context);
   const uint32_t reserve_flag = 1u << kA64BackendHasReserveBit;
   const bool had_reservation = (bctx->flags & reserve_flag) != 0;
-  // PPC stwcx. unconditionally clears the reservation.
+  // stwcx. always clears the reservation, stored or not
   bctx->flags &= ~reserve_flag;
-  if (!had_reservation) {
+  // the reservation must be for the address we're storing to
+  if (!had_reservation || bctx->reserve_address != uint32_t(guest_address)) {
     return 0;
   }
 
-  volatile uint64_t* block;
-  uint32_t bit;
-  ReserveOffsetAndBit(bctx->reserve_helper_, uint32_t(guest_address), block,
-                      bit);
-  // Sanity: the cached offset/bit from the matching lwarx must match.
-  if (bctx->cached_reserve_offset != reinterpret_cast<uintptr_t>(block) ||
-      bctx->cached_reserve_bit != bit) {
-    assert_always();
+  auto& granule =
+      ReserveGranule(bctx->reserve_helper_, uint32_t(guest_address));
+  // a store to this granule since our lwarx kills the reservation
+  if (granule.load(std::memory_order_acquire) != bctx->reserve_generation) {
     return 0;
   }
 
@@ -585,21 +570,10 @@ uint64_t ReservedStoreImpl(void* raw_context, uint64_t guest_address,
         reinterpret_cast<volatile uint32_t*>(uintptr_t(host_address)));
   }
 
-  // Clear our reservation bit even if exchange failed — PPC stwcx. always
-  // releases. If it's already clear (another thread invalidated us), the
-  // exchange will have failed and we'll return 0.
-  const uint64_t mask = uint64_t(1) << bit;
-  while (true) {
-    const uint64_t old = *block;
-    if ((old & mask) == 0) {
-      break;
-    }
-    if (xe::atomic_cas(old, old & ~mask,
-                       reinterpret_cast<volatile uint64_t*>(block))) {
-      break;
-    }
+  if (exchange_ok) {
+    // the store landed, so kill other reservations on this granule
+    granule.fetch_add(1, std::memory_order_release);
   }
-
   return exchange_ok ? 1 : 0;
 }
 
@@ -620,6 +594,34 @@ extern "C" uint64_t ReservedStore64Helper(void* raw_context,
 }
 
 }  // namespace
+
+uint32_t A64Backend::ReservedLoad32(ppc::PPCContext* context,
+                                    uint32_t address) {
+  return ReservedLoadImpl<uint32_t>(context, address);
+}
+
+uint64_t A64Backend::ReservedLoad64(ppc::PPCContext* context,
+                                    uint32_t address) {
+  return ReservedLoadImpl<uint64_t>(context, address);
+}
+
+bool A64Backend::ReservedStore32(ppc::PPCContext* context, uint32_t address,
+                                 uint32_t value) {
+  return ReservedStoreImpl<uint32_t>(
+             context, address,
+             reinterpret_cast<uint64_t>(
+                 context->TranslateVirtual<uint32_t*>(address)),
+             xe::byte_swap(value)) != 0;
+}
+
+bool A64Backend::ReservedStore64(ppc::PPCContext* context, uint32_t address,
+                                 uint64_t value) {
+  return ReservedStoreImpl<uint64_t>(
+             context, address,
+             reinterpret_cast<uint64_t>(
+                 context->TranslateVirtual<uint64_t*>(address)),
+             xe::byte_swap(value)) != 0;
+}
 
 // ==========================================================================
 // ResolveFunction — runtime function resolution.

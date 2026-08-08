@@ -209,9 +209,9 @@ endif()
 xe_embed_binary_assets(xenia-app
     "${PROJECT_SOURCE_DIR}/assets/icons" icons)
 
-# Bake game-compat data (canary.json from xenia-manager/database).
+# Bake game-compat data (compatibility_data.json from xenia-canary/game-compatibility).
 xe_embed_compressed_bundle(xenia-app
-    "${PROJECT_SOURCE_DIR}/build/data_repos/xenia-manager-database/data/game-compatibility"
+    "${PROJECT_SOURCE_DIR}/build/data_repos/game-compatibility"
     game_compat)
 
 # Bake the x360db title database (games.json from xenia-manager/x360db).

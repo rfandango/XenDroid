@@ -47,10 +47,12 @@ uint XeResolveHostColorPack32Float(float4_xe color, uint format) {
   switch (format) {
     case kXenosColorRenderTargetFormat_8_8_8_8:
     case kXenosColorRenderTargetFormat_8_8_8_8_GAMMA:
-      return XePackR8G8B8A8UNorm(color);
+      return XePackR8G8B8A8(
+          color, kXenosSurfaceNumberFormat_UnsignedRepeatingFraction);
     case kXenosColorRenderTargetFormat_2_10_10_10:
     case kXenosColorRenderTargetFormat_2_10_10_10_AS_10_10_10_10:
-      return XePackR10G10B10A2UNorm(color);
+      return XePackR10G10B10A2(
+          color, kXenosSurfaceNumberFormat_UnsignedRepeatingFraction);
     case kXenosColorRenderTargetFormat_2_10_10_10_FLOAT:
     case kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16:
       return XeResolveHostColorFloat32To7e3(color.r) |

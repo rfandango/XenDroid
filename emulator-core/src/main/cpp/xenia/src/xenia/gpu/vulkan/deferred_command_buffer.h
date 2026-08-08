@@ -10,6 +10,7 @@
 #ifndef XENIA_GPU_VULKAN_DEFERRED_COMMAND_BUFFER_H_
 #define XENIA_GPU_VULKAN_DEFERRED_COMMAND_BUFFER_H_
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -55,6 +56,7 @@ class DeferredCommandBuffer {
     args.render_area = render_pass_begin->renderArea;
     args.clear_value_count = clear_value_count;
     args.contents = contents;
+    BeginRenderAreaTracking(arguments_size, /*dynamic_rendering=*/false);
     if (clear_value_count) {
       std::memcpy(args_ptr + clear_values_offset,
                   render_pass_begin->pClearValues,
@@ -229,6 +231,9 @@ class DeferredCommandBuffer {
     std::memcpy(attachments_arg, attachments,
                 sizeof(VkClearAttachment) * attachment_count);
     std::memcpy(rects_arg, rects, sizeof(VkClearRect) * rect_count);
+    for (uint32_t i = 0; i < rect_count; ++i) {
+      AccumulateDrawnRect(rects[i].rect);
+    }
   }
 
   VkImageSubresourceRange* CmdClearColorImageEmplace(
@@ -348,6 +353,7 @@ class DeferredCommandBuffer {
 
   void CmdVkDraw(uint32_t vertex_count, uint32_t instance_count,
                  uint32_t first_vertex, uint32_t first_instance) {
+    AccumulateDrawnScissor();
     auto& args = *reinterpret_cast<ArgsVkDraw*>(
         WriteCommand(Command::kVkDraw, sizeof(ArgsVkDraw)));
     args.vertex_count = vertex_count;
@@ -359,6 +365,7 @@ class DeferredCommandBuffer {
   void CmdVkDrawIndexed(uint32_t index_count, uint32_t instance_count,
                         uint32_t first_index, int32_t vertex_offset,
                         uint32_t first_instance) {
+    AccumulateDrawnScissor();
     auto& args = *reinterpret_cast<ArgsVkDrawIndexed*>(
         WriteCommand(Command::kVkDrawIndexed, sizeof(ArgsVkDrawIndexed)));
     args.index_count = index_count;
@@ -441,6 +448,11 @@ class DeferredCommandBuffer {
     args.scissor_count = scissor_count;
     std::memcpy(args_ptr + header_size, scissors,
                 sizeof(VkRect2D) * scissor_count);
+    // Dynamic state persists across render pass boundaries, so this is kept
+    // outside the per-pass tracking.
+    if (first_scissor == 0 && scissor_count) {
+      current_scissor_ = scissors[0];
+    }
   }
 
   void CmdVkSetStencilCompareMask(VkStencilFaceFlags face_mask,
@@ -974,6 +986,57 @@ class DeferredCommandBuffer {
   };
 
   void* WriteCommand(Command command, size_t arguments_size_bytes);
+
+ public:
+  // Shrinks the last recorded begin-pass render area to the union of the
+  // pass's draw scissors and clear rects, rounded up to the granularity. Only
+  // ever shrinks; a pass with no recorded draws keeps the full extent. Must be
+  // called before the stream is executed, while the args are still patchable.
+  void ShrinkRenderAreaToDrawn(uint32_t granularity_width,
+                               uint32_t granularity_height);
+
+ private:
+  // Offset of the last recorded begin-pass argument struct, in stream elements
+  // (not a pointer - the stream vector reallocates as it grows).
+  static constexpr size_t kNoRenderAreaPatch = SIZE_MAX;
+  size_t render_area_patch_offset_ = kNoRenderAreaPatch;
+  bool render_area_patch_dynamic_ = false;
+  VkRect2D current_scissor_ = {};
+  uint32_t pass_drawn_width_ = 0;
+  uint32_t pass_drawn_height_ = 0;
+  uint32_t pass_recorded_draws_ = 0;
+
+  void BeginRenderAreaTracking(size_t arguments_size_bytes,
+                               bool dynamic_rendering) {
+    const size_t arguments_size_elements =
+        (arguments_size_bytes + sizeof(uintmax_t) - 1) / sizeof(uintmax_t);
+    render_area_patch_offset_ = command_stream_size_ - arguments_size_elements;
+    render_area_patch_dynamic_ = dynamic_rendering;
+    pass_drawn_width_ = 0;
+    pass_drawn_height_ = 0;
+    pass_recorded_draws_ = 0;
+  }
+
+  void AccumulateDrawnRect(const VkRect2D& rect) {
+    if (render_area_patch_offset_ == kNoRenderAreaPatch) {
+      return;
+    }
+    pass_drawn_width_ =
+        std::max(pass_drawn_width_,
+                 uint32_t(std::max(0, rect.offset.x)) + rect.extent.width);
+    pass_drawn_height_ =
+        std::max(pass_drawn_height_,
+                 uint32_t(std::max(0, rect.offset.y)) + rect.extent.height);
+  }
+
+  void AccumulateDrawnScissor() {
+    if (render_area_patch_offset_ == kNoRenderAreaPatch) {
+      return;
+    }
+    ++pass_recorded_draws_;
+    AccumulateDrawnRect(current_scissor_);
+  }
+
 
   const VulkanCommandProcessor& command_processor_;
 

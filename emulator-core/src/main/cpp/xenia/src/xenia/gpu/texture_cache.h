@@ -97,7 +97,13 @@ class TextureCache {
   virtual void BeginSubmission(uint64_t new_submission_index);
   virtual void BeginFrame();
 
-  void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+  // Marks the range as containing resolved data and invalidates textures
+  // overlapping it. resolution_scaled is whether the data went to the scaled
+  // resolve address space, or to shared memory, such as resolves done at
+  // native resolution when a scale threshold is set. The latter clears the
+  // scaled state of the range.
+  void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled,
+                           bool resolution_scaled);
   // Ensures the memory backing the range in the scaled resolve address space is
   // allocated and returns whether it is.
   virtual bool EnsureScaledResolveMemoryCommitted(
@@ -180,6 +186,11 @@ class TextureCache {
     const TextureBinding* binding =
         GetValidTextureBinding(fetch_constant_index);
     return binding ? binding->swizzled_signs : kSwizzledSignsUnsigned;
+  }
+  uint32_t GetActiveIntegerScaleBits(uint32_t fetch_constant_index) const {
+    const TextureBinding* binding =
+        GetValidTextureBinding(fetch_constant_index);
+    return binding ? binding->integer_scale_bits : 0;
   }
   bool IsActiveTextureResolutionScaled(uint32_t fetch_constant_index) const {
     const TextureBinding* binding =
@@ -558,6 +569,8 @@ class TextureCache {
 
   struct TextureBinding {
     TextureKey key;
+    // Packed integer scale, 5 bits per component.
+    uint32_t integer_scale_bits;
     // Destination swizzle merged with guest to host format swizzle.
     uint32_t host_swizzle;
     // Packed TextureSign values, 2 bit per each component, with guest-side
@@ -642,6 +655,12 @@ class TextureCache {
     assert_true(load_shader_index < kLoadShaderCount);
     return load_shader_info_[load_shader_index];
   }
+  // Integer num_format on fixed textures. Returns the packed scale used by the
+  // shader to restore guest integer units from normalized host samples.
+  static uint32_t GetIntegerScaleBits(xenos::TextureFormat guest_format,
+                                      uint32_t num_format,
+                                      uint32_t host_swizzle,
+                                      uint8_t swizzled_signs);
   bool LoadTextureData(Texture& texture);
   void LoadTexturesData(Texture** textures, uint32_t n_textures);
   // Writes the texture data (for base, mips or both - but not neither) from the
@@ -683,9 +702,21 @@ class TextureCache {
                             void* context, void* data, uint64_t argument,
                             bool invalidated_by_gpu);
 
+ protected:
   // Checks if there are any pages that contain scaled resolve data within the
   // range.
   bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+
+  // Whether a scaled resolve texture's mips must be host-generated (the guest
+  // did not resolve them into scaled memory itself).
+  bool ScaledResolveMipsNeedGeneration(const Texture& texture) {
+    const TextureKey& key = texture.key();
+    return key.scaled_resolve && key.mip_max_level != 0 &&
+           !IsRangeScaledResolved(key.mip_page << 12,
+                                  texture.GetGuestMipsSize());
+  }
+
+ private:
   // Global shared memory invalidation callback for invalidating scaled resolved
   // texture data.
   static void ScaledResolveGlobalWatchCallbackThunk(

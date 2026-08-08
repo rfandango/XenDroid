@@ -796,6 +796,13 @@ class Shader {
     // True if the shader has already been translated.
     bool is_translated() const { return is_translated_; }
 
+    // For background-thread translation: atomically claim the right to
+    // translate. Returns true if the caller should translate, false if another
+    // thread already claimed it (and is_translated() should be awaited).
+    bool TryClaimTranslation() {
+      return !translation_claimed_.test_and_set(std::memory_order_acq_rel);
+    }
+
     // Errors that occurred during translation.
     const std::vector<Error>& errors() const { return errors_; }
 
@@ -842,6 +849,7 @@ class Shader {
 
     bool is_valid_ = false;
     bool is_translated_ = false;
+    std::atomic_flag translation_claimed_ = ATOMIC_FLAG_INIT;
     std::vector<Error> errors_;
     std::string host_disassembly_;
   };

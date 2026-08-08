@@ -6,6 +6,10 @@ add_executable(xenia-cpu-ppc-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ppc_testing_main.cc
 )
 
+target_compile_definitions(xenia-cpu-ppc-tests PRIVATE
+    XE_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+
+# Add platform-specific console app main
 if(WIN32)
   target_sources(xenia-cpu-ppc-tests PRIVATE
     ${PROJECT_SOURCE_DIR}/src/xenia/base/console_app_main_win.cc)

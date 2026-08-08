@@ -1013,7 +1013,7 @@ void XeResolveHostColorFullMain(
       byte_buffer_align4_store4_xe(
           xe_resolve_dest,
           XeResolveDestPixelAddress(resolve_info, pixel_index, 0u),
-          XePackR8G8B8A8UNorm(pixels_0123));
+          XePackR8G8B8A8(pixels_0123, resolve_info.dest_num_format));
     #else
       float4_xe pixels_0123, pixels_4567;
       XeResolveHostColorFullLoad8RedColors(
@@ -1036,8 +1036,8 @@ void XeResolveHostColorFullMain(
       byte_buffer_align8_store8_xe(
           xe_resolve_dest,
           XeResolveDestPixelAddress(resolve_info, pixel_index, 0u),
-          uint2_xe(XePackR8G8B8A8UNorm(pixels_0123),
-                   XePackR8G8B8A8UNorm(pixels_4567)));
+          uint2_xe(XePackR8G8B8A8(pixels_0123, resolve_info.dest_num_format),
+                   XePackR8G8B8A8(pixels_4567, resolve_info.dest_num_format)));
     #endif
   #elif XE_RESOLVE_HOST_COLOR_FULL_DEST_BPP == 16
     float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
@@ -1048,7 +1048,8 @@ void XeResolveHostColorFullMain(
         pass_next_after_texture_xe
         pass_texture_xe(xe_resolve_host_color_source));
     uint2_xe packed = XePack16bpp4PixelsInUInt2(
-        pixel_0, pixel_1, pixel_2, pixel_3, resolve_info.dest_format);
+        pixel_0, pixel_1, pixel_2, pixel_3, resolve_info.dest_format,
+        resolve_info.dest_num_format);
     dont_flatten_xe
     if (pixel_index.x == 0u &&
         resolve_info.half_pixel_offset_fill_source.x != 0u) {
@@ -1072,8 +1073,9 @@ void XeResolveHostColorFullMain(
         pass_const_buffer_xe(xe_resolve_host_color)
         pass_next_after_texture_xe
         pass_texture_xe(xe_resolve_host_color_source));
-    uint4_xe packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2,
-                                         pixel_3, resolve_info.dest_format);
+    uint4_xe packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
+                                         resolve_info.dest_format,
+                                         resolve_info.dest_num_format);
     XeResolveHostColorApplyHalfPixelOffset32(resolve_info, pixel_index, packed);
     byte_buffer_align16_store16_xe(
         xe_resolve_dest,
@@ -1089,7 +1091,8 @@ void XeResolveHostColorFullMain(
         pass_texture_xe(xe_resolve_host_color_source));
     uint4_xe packed_01, packed_23;
     XePack64bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
-                       resolve_info.dest_format, packed_01, packed_23);
+                       resolve_info.dest_format, resolve_info.dest_num_format,
+                       packed_01, packed_23);
     XeResolveHostColorApplyHalfPixelOffset64(resolve_info, pixel_index,
                                              packed_01, packed_23);
     uint dest_address = XeResolveDestPixelAddress(resolve_info, pixel_index,

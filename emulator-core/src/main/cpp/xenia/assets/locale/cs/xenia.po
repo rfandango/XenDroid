@@ -114,10 +114,6 @@ msgstr "&Zobrazení"
 msgid "&Volume"
 msgstr "&Hlasitost"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(Nainstalováno) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(neznámý titul)"
@@ -964,6 +960,14 @@ msgstr "Žádné profily nenalezeny"
 msgid "No file path is set for this title."
 msgstr "Pro tento titul není nastavena cesta k souboru."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "Nebyly nalezeny žádné hry."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "Nebyly nalezeny žádné nové hry."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1315,10 +1319,6 @@ msgstr "Stav"
 msgid "Status: %s"
 msgstr "Stav: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "Stav: Nainstalováno"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "Zastavit běžící titul a vrátit se do seznamu"
@@ -1580,3 +1580,4 @@ msgstr "Ladicí vrstva Direct3D 12 nainstalována, ale automatický restart selh
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll nenalezen, vyžadován pro grafický backend Vulkan. Stáhnout nyní (~20 MB)?"
+

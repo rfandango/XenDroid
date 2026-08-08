@@ -8,7 +8,6 @@
  */
 
 #include "xenia/kernel/xam/apps/xmp_app.h"
-#include "xenia/kernel/xthread.h"
 
 #include "xenia/base/logging.h"
 #include "xenia/emulator.h"
@@ -24,12 +23,6 @@ namespace apps {
 XmpApp::XmpApp(KernelState* kernel_state) : App(kernel_state, 0xFA) {}
 
 X_HRESULT XmpApp::XMPGetStatus(uint32_t state_ptr) {
-  if (!XThread::GetCurrentThread()->main_thread()) {
-    // Some stupid games will hammer this on a thread - induce a delay
-    // here to keep from starving real threads.
-    xe::threading::Sleep(std::chrono::milliseconds(1));
-  }
-
   if (!state_ptr) {
     return X_E_INVALIDARG;
   }
@@ -424,11 +417,6 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       *playback_controller_locked = media_player->IsXMPOverrideEnabled();
 
-      if (!XThread::GetCurrentThread()->main_thread()) {
-        // Atrain spawns a thread 82437FD0 to call this in a tight loop forever.
-        xe::threading::Sleep(std::chrono::milliseconds(10));
-      }
-
       return X_E_SUCCESS;
     }
     case 0x00070025: {
@@ -557,6 +545,28 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
           args->storage_ptr.get());
 
       kernel_state_->BroadcastNotification(kXNotificationXmpDashInitChanged, 1);
+      return X_E_SUCCESS;
+    }
+    case 0x00070031: {
+      // XMPGetNumSongsInTitlePlaylist
+      // Song count exist at playlist_ptr->0x78, if playlist_ptr->0xc == 0 or 1
+      // return song count, else return zero
+      assert_true(!buffer_length ||
+                  buffer_length == sizeof(XMP_GET_NUM_SONGS_IN_TITLE_PLAYLIST));
+      XMP_GET_NUM_SONGS_IN_TITLE_PLAYLIST* args =
+          reinterpret_cast<XMP_GET_NUM_SONGS_IN_TITLE_PLAYLIST*>(buffer);
+
+      XELOGD(
+          "XMPGetNumSongsInTitlePlaylist({:08X}, {:08X}, {:08X}), "
+          "unimplemented",
+          uint32_t(args->xmp_client.get()), args->playlist_ptr.get(),
+          args->song_count_ptr.get());
+
+      if (!args->playlist_ptr || !args->song_count_ptr) {
+        return X_E_INVALIDARG;
+      }
+      xe::store_and_swap<uint32_t>(
+          memory_->TranslateVirtual(args->song_count_ptr), 0);
       return X_E_SUCCESS;
     }
     case 0x0007003D: {

@@ -664,7 +664,17 @@ void RtlLeaveCriticalSection_entry(pointer_t<X_RTL_CRITICAL_SECTION> cs) {
     XELOGE("Null critical section in RtlLeaveCriticalSection!");
     return;
   }
-  assert_true(cs->owning_thread == XThread::GetCurrentThread()->guest_object());
+  // Retail RtlLeaveCriticalSection does not check ownership, it just
+  // decrements. A non-owner leave is a caller error but titles rely on it, so
+  // log not assert.
+  uint32_t leaving_thread = XThread::GetCurrentThread()->guest_object();
+  if (cs->owning_thread != leaving_thread) {
+    XELOGD(
+        "RtlLeaveCriticalSection {:08X} left by non-owner (owner {:08X}, "
+        "caller "
+        "{:08X})",
+        cs.guest_address(), uint32_t(cs->owning_thread), leaving_thread);
+  }
 
   // Drop recursion count - if it isn't zero we still have the lock.
   assert_true(cs->recursion_count > 0);

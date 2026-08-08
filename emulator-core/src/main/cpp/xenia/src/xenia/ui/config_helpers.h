@@ -314,7 +314,7 @@ GetKnownEnumOptions() {
         {"d3d12_readback_resolve",
          {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
         {"occlusion_query", {"fake", "fast", "fast-alt", "strict"}},
-        {"readback_resolve", {"fast", "some", "full", "none"}},
+        {"readback_resolve", {"fast", "all", "none"}},
         {"render_target_path", {"performance", "accuracy"}},
         {"postprocess_antialiasing", {"off", "fxaa", "fxaa_extreme"}},
         {"postprocess_scaling_and_sharpening", {"none", "cas", "fsr"}},
@@ -336,6 +336,26 @@ GetKnownEnumOptions() {
     return m;
   }();
   return options;
+}
+
+// Index to preselect in an enum dropdown: the current value if it is a known
+// option, otherwise the cvar default (so a value invalidated by a config
+// change shows the default instead of blank), otherwise the first option.
+// Returns -1 only when there are no options.
+inline int GetEnumSelectionIndex(const std::vector<std::string>& options,
+                                 const std::string& current_value,
+                                 const std::string& default_value) {
+  for (size_t i = 0; i < options.size(); ++i) {
+    if (options[i] == current_value) {
+      return static_cast<int>(i);
+    }
+  }
+  for (size_t i = 0; i < options.size(); ++i) {
+    if (options[i] == default_value) {
+      return static_cast<int>(i);
+    }
+  }
+  return options.empty() ? -1 : 0;
 }
 
 enum class CvarPathKind {

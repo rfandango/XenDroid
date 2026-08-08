@@ -115,7 +115,11 @@ class SharedMemory {
   // be called, to make sure, if the GPU writes don't overwrite *everything* in
   // the pages they touch, the CPU data is properly loaded to the unmodified
   // regions in those pages.
-  void RangeWrittenByGpu(uint32_t start, uint32_t length);
+  // written_to_buffer false means the GPU wrote guest RAM directly (memexport
+  // routed to the host-imported buffer), leaving the shared memory buffer stale
+  // for this range rather than up to date.
+  void RangeWrittenByGpu(uint32_t start, uint32_t length,
+                         bool written_to_buffer = true);
 
  protected:
   SharedMemory(Memory& memory);
@@ -244,12 +248,6 @@ class SharedMemory {
   // Bitmap of dirty 64-entry chunks of valid_and_gpu_written, so localized GPU
   // writes only copy the chunks that changed.
   uint32_t dirty_blocks_ = 0;
-
-  // Per-page bitmap (sized like the valid flags) of pages the write watch can't
-  // cover - not writable in any physical window, so their CPU writes never
-  // fault. They are re-invalidated every frame to force a fresh re-upload.
-  std::vector<uint64_t> watch_blind_pages_;
-  bool has_watch_blind_pages_ = false;
 
   unsigned num_system_page_flags_ = 0;
 

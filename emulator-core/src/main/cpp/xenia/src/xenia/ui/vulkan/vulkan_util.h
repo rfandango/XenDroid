@@ -13,6 +13,16 @@
 #include <algorithm>
 #include <cstdint>
 
+#if defined(__has_feature)
+#if __has_feature(hwaddress_sanitizer)
+#define XE_HWASAN_ENABLED 1
+#include <sanitizer/hwasan_interface.h>
+#endif
+#endif
+#ifndef XE_HWASAN_ENABLED
+#define XE_HWASAN_ENABLED 0
+#endif
+
 #include "xenia/base/cvar.h"
 #include "xenia/base/math.h"
 #include "xenia/ui/vulkan/vulkan_device.h"
@@ -23,6 +33,18 @@ namespace xe {
 namespace ui {
 namespace vulkan {
 namespace util {
+
+// The driver maps device memory behind the sanitizer's back, so whatever tags
+// the shadow held for that address range survive and are reported against
+// perfectly valid writes. Reset them whenever a mapping is handed out.
+inline void ResetSanitizerTags(void* mapping, VkDeviceSize size) {
+#if XE_HWASAN_ENABLED
+  __hwasan_tag_memory(mapping, 0, size_t(size));
+#else
+  (void)mapping;
+  (void)size;
+#endif
+}
 
 template <typename DestroyFunction, typename Object>
 inline bool DestroyAndNullHandle(DestroyFunction* const destroy_function,
@@ -115,6 +137,15 @@ void FlushMappedMemoryRange(const VulkanDevice* vulkan_device,
                             VkDeviceSize offset = 0,
                             VkDeviceSize memory_size = VK_WHOLE_SIZE,
                             VkDeviceSize size = VK_WHOLE_SIZE);
+
+// Invalidates the CPU cache for a mapped range so GPU writes are visible to the
+// host. A no-op if the memory is host-coherent. Same range semantics as
+// FlushMappedMemoryRange.
+void InvalidateMappedMemoryRange(const VulkanDevice* vulkan_device,
+                                 VkDeviceMemory memory, uint32_t memory_type,
+                                 VkDeviceSize offset = 0,
+                                 VkDeviceSize memory_size = VK_WHOLE_SIZE,
+                                 VkDeviceSize size = VK_WHOLE_SIZE);
 
 inline VkExtent2D GetMax2DFramebufferExtent(
     const VulkanDevice::Properties& device_properties) {

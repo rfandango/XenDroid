@@ -11,9 +11,11 @@
 #include "xenia/apu/xma_decoder.h"
 #include "xenia/base/logging.h"
 #include "xenia/emulator.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
+#include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
 namespace xe {
@@ -376,11 +378,14 @@ DECLARE_XBOXKRNL_EXPORT2(XMAEnableContext, kAudio, kImplemented,
 dword_result_t XMADisableContext_entry(lpvoid_t context_ptr, dword_t wait) {
   X_HRESULT result = X_E_SUCCESS;
   StoreXmaContextIndexedRegister(kernel_state(), 0x1A40, context_ptr);
-  if (!kernel_state()
-           ->emulator()
-           ->audio_system()
-           ->xma_decoder()
-           ->BlockOnContext(context_ptr, !wait)) {
+  auto* decoder = kernel_state()->emulator()->audio_system()->xma_decoder();
+  if (wait && XThread::GetCurrentFiberThread()) {
+    // Retry the non-blocking form, since taking the decoder lock would stall
+    // every guest thread sharing this dispatch thread.
+    while (!decoder->BlockOnContext(context_ptr, true)) {
+      GuestScheduler::SpinYield(std::chrono::milliseconds(1));
+    }
+  } else if (!decoder->BlockOnContext(context_ptr, !wait)) {
     result = X_E_FALSE;
   }
   return result;
@@ -397,7 +402,7 @@ dword_result_t XMABlockWhileInUse_entry(lpvoid_t context_ptr) {
     if (!context.work_buffer_ptr) {
       break;
     }
-    xe::threading::Sleep(std::chrono::milliseconds(1));
+    GuestScheduler::SpinYield(std::chrono::milliseconds(1));
   } while (true);
   return 0;
 }

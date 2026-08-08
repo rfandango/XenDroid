@@ -13,11 +13,13 @@ from glob import glob
 from json import loads as jsonloads
 import os
 import platform
-from shutil import rmtree, which as shutil_which
+from shutil import rmtree, copy2, which as shutil_which
 import subprocess
 import sys
 import stat
 import tarfile
+import time
+from urllib.parse import urlparse
 import urllib.request
 import zipfile
 import enum
@@ -475,15 +477,6 @@ def fetch_data_repos():
             "branch": "main",
         },
         {
-            "name": "xenia-manager-database",
-            "url": "https://github.com/xenia-manager/database.git",
-            "branch": "main",
-            "sparse_paths": [
-                "data/game-compatibility/canary.json",
-                "data/game-compatibility/stable.json",
-            ],
-        },
-        {
             "name": "x360db",
             "url": "https://github.com/xenia-manager/x360db.git",
             "branch": "main",
@@ -524,6 +517,46 @@ def fetch_data_repos():
                 repo["url"],
                 repo_path,
             ])
+
+    # Assemble the game-compatibility bake dir. compatibility_data.json comes
+    # from the xenia-canary/game-compatibility release. master.json is vendored.
+    compat_dir = os.path.join(data_dir, "game-compatibility")
+    os.makedirs(compat_dir, exist_ok=True)
+
+    vendored_master = os.path.join("assets", "game-compatibility", "master.json")
+    if os.path.isfile(vendored_master):
+        copy2(vendored_master, os.path.join(compat_dir, "master.json"))
+    else:
+        print_warning("vendored master.json not found at " + vendored_master)
+
+    compat_url = (
+        "https://github.com/xenia-canary/game-compatibility/releases/download/"
+        "game-compatibility/compatibility_data.json"
+    )
+    compat_url_parsed = urlparse(compat_url)
+    compat_path = os.path.join(compat_dir, "compatibility_data.json")
+    print("  - downloading compatibility_data.json...")
+    max_attempts = 3
+    if compat_url_parsed.scheme != "https":
+        print_error("compatibility_data URL is not https")
+        sys.exit(1)
+    else:
+        for attempt in range(1, max_attempts + 1):
+            tmp_path = compat_path + ".tmp"
+            try:
+                urllib.request.urlretrieve(compat_url, tmp_path)
+                os.replace(tmp_path, compat_path)
+                break
+            except (urllib.error.URLError, OSError) as e:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                if attempt < max_attempts:
+                    print(f"  - attempt {attempt}/{max_attempts} failed: {e}, retrying...")
+                    time.sleep(2 * attempt)
+                else:
+                    print_error(f"compatibility_data.json download failed after "
+                                f"{max_attempts} attempts: {e}")
+                    sys.exit(1)
 
 
 def get_cc(cc=None):

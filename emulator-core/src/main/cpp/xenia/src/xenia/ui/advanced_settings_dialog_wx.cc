@@ -282,13 +282,11 @@ wxWindow* AdvancedSettingsDialog::CreateEditor(wxWindow* parent,
 
   if (enum_it != enums.end()) {
     auto* combo = new wxChoice(parent, wxID_ANY);
-    int sel = -1;
     for (size_t i = 0; i < enum_it->second.size(); ++i) {
       combo->Append(wxString::FromUTF8(enum_it->second[i]));
-      if (enum_it->second[i] == info->pending_value) {
-        sel = static_cast<int>(i);
-      }
     }
+    int sel = ui::GetEnumSelectionIndex(enum_it->second, info->pending_value,
+                                        info->var->default_value());
     if (sel >= 0) {
       combo->SetSelection(sel);
     }

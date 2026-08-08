@@ -25,7 +25,15 @@ enum class CompatState : uint8_t {
   kPlayable,
 };
 
+struct CompatEntry {
+  CompatState state = CompatState::kUnknown;
+  std::string url;
+};
+
 CompatState GetCompatState(uint32_t title_id);
+
+// Issue URL from the compatibility database for a title, or empty if absent.
+std::string GetCompatUrl(uint32_t title_id);
 
 // GitHub issue-search query fragment for a title. Returns the title id, or all
 // sibling ids (x360db alternative ids) OR'd in parentheses when present.

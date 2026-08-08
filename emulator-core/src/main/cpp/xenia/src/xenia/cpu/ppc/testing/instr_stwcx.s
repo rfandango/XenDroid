@@ -30,6 +30,87 @@ test_stwcx_fail:
   #_ REGISTER_OUT r12 0x00000000
   #_ MEMORY_OUT 0x0000000010001000 [00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00]
 
+test_stwcx_lwarx_twice:
+  #_ MEMORY_IN 0x10001000 00000000
+  #_ REGISTER_IN r3 0x00000000AABBCCDD
+  #_ REGISTER_IN r4 0x0000000010001000
+  #_ REGISTER_IN r5 0x0000000000000000
+  # A second lwarx replaces the first reservation rather than trapping.
+  lwarx r6, r4, r5
+  lwarx r7, r4, r5
+  stwcx. r3, r4, r5
+  mfcr r12
+  blr
+  #_ REGISTER_OUT r6 0x0000000000000000
+  #_ REGISTER_OUT r7 0x0000000000000000
+  #_ REGISTER_OUT r12 0x20000000
+  #_ MEMORY_OUT 0x10001000 AABBCCDD
+
+test_stwcx_abandoned_reservation:
+  #_ MEMORY_IN 0x10001000 00000000
+  #_ MEMORY_IN 0x10001080 00000000
+  #_ REGISTER_IN r3 0x0000000011223344
+  #_ REGISTER_IN r4 0x0000000010001000
+  #_ REGISTER_IN r5 0x0000000000000000
+  #_ REGISTER_IN r7 0x0000000000000080
+  # Walking away from a reservation must not wedge its granule.
+  lwarx r6, r4, r5
+  lwarx r8, r4, r7
+  stwcx. r3, r4, r7
+  mfcr r12
+  blr
+  #_ REGISTER_OUT r12 0x20000000
+  #_ MEMORY_OUT 0x10001000 00000000
+  #_ MEMORY_OUT 0x10001080 11223344
+
+test_stwcx_address_mismatch:
+  #_ MEMORY_IN 0x10001000 00000000
+  #_ MEMORY_IN 0x10001080 00000000
+  #_ REGISTER_IN r3 0x0000000055667788
+  #_ REGISTER_IN r4 0x0000000010001000
+  #_ REGISTER_IN r5 0x0000000000000000
+  #_ REGISTER_IN r7 0x0000000000000080
+  # stwcx. to an address the lwarx didn't reserve fails without storing.
+  lwarx r6, r4, r5
+  stwcx. r3, r4, r7
+  mfcr r12
+  blr
+  #_ REGISTER_OUT r12 0x00000000
+  #_ MEMORY_OUT 0x10001000 00000000
+  #_ MEMORY_OUT 0x10001080 00000000
+
+test_stwcx_clears_reservation:
+  #_ MEMORY_IN 0x10001000 00000000
+  #_ REGISTER_IN r3 0x0000000012345678
+  #_ REGISTER_IN r4 0x0000000010001000
+  #_ REGISTER_IN r5 0x0000000000000000
+  #_ REGISTER_IN r7 0x00000000DEADBEEF
+  # The first stwcx. consumes the reservation, so the second must fail.
+  lwarx r6, r4, r5
+  stwcx. r3, r4, r5
+  mfcr r11
+  stwcx. r7, r4, r5
+  mfcr r12
+  blr
+  #_ REGISTER_OUT r11 0x20000000
+  #_ REGISTER_OUT r12 0x00000000
+  #_ MEMORY_OUT 0x10001000 12345678
+
+test_stwcx_value_changed:
+  #_ MEMORY_IN 0x10001000 00000000
+  #_ REGISTER_IN r3 0x00000000AABBCCDD
+  #_ REGISTER_IN r4 0x0000000010001000
+  #_ REGISTER_IN r5 0x0000000000000000
+  #_ REGISTER_IN r7 0x0000000099999999
+  # A plain store between the pair invalidates the reservation.
+  lwarx r6, r4, r5
+  stw r7, 0(r4)
+  stwcx. r3, r4, r5
+  mfcr r12
+  blr
+  #_ REGISTER_OUT r12 0x00000000
+  #_ MEMORY_OUT 0x10001000 99999999
+
 test_stdcx_1:
   #_ MEMORY_IN 0x0000000010001000 [00, 00, 00, 00, 00, 00, 00, 00]
   #_ REGISTER_IN r3 0xABCDEF1234567890

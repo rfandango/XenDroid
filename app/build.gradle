@@ -52,6 +52,22 @@ android {
         compose true
         buildConfig true
     }
+    // HWASan builds link against the shared sanitizer runtime, which has to
+    // ship inside the APK: the platform copy is not on a normal app's search
+    // path. Sourced from the NDK that compiled the code, so the runtime and
+    // the instrumentation always match.
+    // wrap.sh sets LD_HWASAN=1, which puts the whole process on the platform's
+    // HWASan libc. That must only happen in the sanitizer build: packaging it
+    // unconditionally leaves normal builds running on the hwasan allocator,
+    // which quietly changes both stability and profiling.
+    if (System.getenv('XENDROID_HWASAN') == 'true') {
+        sourceSets {
+            main {
+                resources.srcDirs += 'src/hwasan-res'
+            }
+        }
+    }
+
     packaging {
         // libe.so from :emulator-core is stored uncompressed (matches core).
         jniLibs.useLegacyPackaging = true

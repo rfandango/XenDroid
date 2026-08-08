@@ -112,8 +112,10 @@ class TestSuite {
     name = name.replace_extension();
 
     name_ = xe::path_to_utf8(name);
-    map_file_path_ = cvars::test_bin_path / name.replace_extension(".map");
-    bin_file_path_ = cvars::test_bin_path / name.replace_extension(".bin");
+    map_file_path_ = std::filesystem::path(XE_SOURCE_ROOT) /
+                     cvars::test_bin_path / name.replace_extension(".map");
+    bin_file_path_ = std::filesystem::path(XE_SOURCE_ROOT) /
+                     cvars::test_bin_path / name.replace_extension(".bin");
   }
 
   bool Load() {
@@ -333,7 +335,10 @@ class TestRunner {
           processor_->backend());
       auto* bctx =
           x64_backend->BackendContextForGuestContext(thread_state_->context());
-      bctx->flags &= ~(1U << xe::cpu::backend::x64::kX64BackendMXCSRModeBit);
+      // Also drop any reservation a previous test left behind, so stwcx.
+      // tests don't depend on file/test ordering.
+      bctx->flags &= ~((1U << xe::cpu::backend::x64::kX64BackendMXCSRModeBit) |
+                       (1U << xe::cpu::backend::x64::kX64BackendHasReserveBit));
     }
 #elif XE_ARCH_ARM64
     // Reset FPCR and backend flags to default FPU state before each test.
@@ -342,7 +347,10 @@ class TestRunner {
           processor_->backend());
       auto* bctx =
           a64_backend->BackendContextForGuestContext(thread_state_->context());
-      bctx->flags &= ~(1U << xe::cpu::backend::a64::kA64BackendFPCRModeBit);
+      // Also drop any reservation a previous test left behind, so stwcx.
+      // tests don't depend on file/test ordering.
+      bctx->flags &= ~((1U << xe::cpu::backend::a64::kA64BackendFPCRModeBit) |
+                       (1U << xe::cpu::backend::a64::kA64BackendHasReserveBit));
       // Explicitly reset the hardware FPCR to default FPU mode (0 = round
       // nearest, no flush-to-zero, no default-NaN). Without this, a previous
       // test that set VMX mode (FZ|DN) leaves the hardware FPCR dirty, and
@@ -489,7 +497,8 @@ class TestRunner {
 
 bool DiscoverTests(const std::filesystem::path& test_path,
                    std::vector<std::filesystem::path>& test_files) {
-  auto file_infos = xe::filesystem::ListFiles(test_path);
+  auto file_infos = xe::filesystem::ListFiles(
+      std::filesystem::path(XE_SOURCE_ROOT) / test_path);
   for (auto& file_info : file_infos) {
     if (file_info.name.extension() == ".s") {
       // Only include test files (instr_*.s), not helper files
@@ -592,7 +601,7 @@ bool RunTests(const std::vector<std::string>& test_names) {
   std::vector<TestSuite> test_suites;
   bool load_failed = false;
   for (auto& test_path : test_files) {
-    TestSuite test_suite(test_path);
+    TestSuite test_suite(std::filesystem::path(XE_SOURCE_ROOT) / test_path);
     if (!test_name_filter.empty() &&
         test_name_filter.find(test_suite.name()) == test_name_filter.end()) {
       continue;

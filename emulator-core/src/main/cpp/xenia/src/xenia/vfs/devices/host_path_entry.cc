@@ -140,6 +140,9 @@ void HostPathEntry::RenameEntryInternal(
 }
 
 void HostPathEntry::update() {
+  if (reported_size_fixed_) {
+    return;
+  }
   auto file_info = xe::filesystem::GetInfo(host_path_);
   if (!file_info) {
     return;

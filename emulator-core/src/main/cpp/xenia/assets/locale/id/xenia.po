@@ -114,10 +114,6 @@ msgstr "&Tampilan"
 msgid "&Volume"
 msgstr "&Volume"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(Terpasang) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(title tidak diketahui)"
@@ -964,6 +960,14 @@ msgstr "Tidak ada profil ditemukan"
 msgid "No file path is set for this title."
 msgstr "Tidak ada jalur berkas yang ditetapkan untuk title ini."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "Tidak ada game yang ditemukan."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "Tidak ada game baru yang ditemukan."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1317,10 +1321,6 @@ msgstr "Status"
 msgid "Status: %s"
 msgstr "Status: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "Status: Terpasang"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "Hentikan title yang berjalan dan kembali ke daftar"
@@ -1585,3 +1585,4 @@ msgstr "Lapisan debug Direct3D 12 terpasang, tetapi mulai ulang otomatis gagal. 
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll tidak ditemukan, diperlukan untuk backend grafis Vulkan. Unduh sekarang (~20 MB)?"
+

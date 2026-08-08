@@ -39,17 +39,20 @@ namespace gpu {
 
 enum class GPUSetting {
   ClearMemoryPageState,
-  ReadbackMemexport,
-  ReadbackMemexportFast
+  MemexportAwaitFences,
 };
 
 enum class ReadbackResolveMode {
   kDisabled,  // No readback (none)
-  kSome,      // Delayed sync, skip copy on cache hit (some)
-  kFast,      // Delayed sync, copy every frame (fast)
-  kFull,      // Immediate sync with GPU stall (full)
-  kUma        // Read the mapped shared-memory buffer directly, no GPU copy (uma)
+  kFast,      // Copy only CPU-read resolves into guest RAM (fast)
+  kAll,       // Copy every resolve into guest RAM (all)
+  kUma        // Read host-mapped shared memory directly, no device->host copy
+              // (uma). Adreno cannot import guest RAM (no external_memory_host)
+              // so upstream's zero-copy never engages there; this is the
+              // equivalent for such devices. Kept alongside kFast/kAll to A/B.
 };
+// The readback_resolve_sync cvar makes fast/all copies stall for same-frame
+// coherency instead of running deferred, about a frame behind.
 
 // Occlusion queries - ZPD report mode.
 enum class ZPDMode {
@@ -141,6 +144,9 @@ class CommandProcessor {
 
   Shader* active_vertex_shader() const { return active_vertex_shader_; }
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
+  uint32_t active_vertex_shader_ucode_address() const {
+    return active_vertex_shader_ucode_address_;
+  }
 
   virtual bool Initialize();
   virtual void Shutdown();
@@ -197,6 +203,12 @@ class CommandProcessor {
 
   virtual void TracePlaybackWroteMemory(uint32_t base_ptr, uint32_t length) = 0;
 
+  // Shadowed by backends that route memory export through guest RAM (see
+  // command_processor_memexport.inc). No-ops where export output never reaches
+  // the CPU, so there is nothing to wait for.
+  void AwaitMemexportForFence() {}
+  void AwaitMemexportForCoherency(uint32_t base_bytes, uint32_t size_bytes) {}
+
   void RestoreRegisters(uint32_t first_register,
                         const uint32_t* register_values,
                         uint32_t register_count, bool execute_callbacks);
@@ -232,10 +244,6 @@ class CommandProcessor {
   };
 
   static constexpr uint32_t kReadbackBufferSizeIncrement = 16 * 1024 * 1024;
-
-  // Eviction policy constants for readback buffer cache
-  static constexpr size_t kMaxReadbackBuffers = 256;
-  static constexpr uint64_t kReadbackBufferEvictionAgeFrames = 60;
 
   // Progressive alignment for readback buffers to avoid wasting memory
   static inline uint32_t AlignReadbackBufferSize(uint32_t size) {
@@ -275,6 +283,21 @@ class CommandProcessor {
   uint64_t FrameStatsBegin();
   void FrameStatsEndDraw(uint64_t begin_ns);
   void FrameStatsEndSwap(uint64_t begin_ns);
+
+  // Constants for the shared resolve-downscale compute shader (used by the
+  // D3D12 and Vulkan backends to downscale a scaled resolve back to 1x).
+  struct ResolveDownscaleConstants {
+    uint32_t scale_x;          // 1 to kMaxDrawResolutionScaleAlongAxis
+    uint32_t scale_y;          // 1 to kMaxDrawResolutionScaleAlongAxis
+    uint32_t pixel_size_log2;  // 0=8bit, 1=16bit, 2=32bit, 3=64bit
+    uint32_t tile_count;       // Number of 32x32 tiles to process
+    // Byte offset into the source buffer. On D3D12 this is 0 (the offset is
+    // baked into the source SRV); on Vulkan it is the real byte offset.
+    uint32_t source_offset_bytes;
+    // When non-zero, apply half-pixel offset correction by sampling from
+    // (scale/2, scale/2) within each scaled block instead of (0, 0).
+    uint32_t half_pixel_offset;
+  };
 
   void WorkerThreadMain();
   virtual bool SetupContext() = 0;
@@ -363,7 +386,8 @@ class CommandProcessor {
   // One active guest report slot. May span multiple host query segments split
   // across submissions or render passes, final value is the normalized sum.
   struct ZPDReport {
-    // Raw host count across all segments, normalized at retirement.
+    // Guest sample count. Each segment is normalized by its own scale area
+    // when it resolves.
     uint64_t accumulated_samples = 0;
     // Submission of the first closed segment.
     uint64_t first_segment_end_submission = 0;
@@ -390,6 +414,7 @@ class CommandProcessor {
     uint32_t slot_base = 0;
     uint32_t begin_record = 0;
     uint32_t end_record = 0;
+    uint32_t scale_area = 0;
     bool segment_active = false;
     bool segment_pending_begin = false;
     bool logical_active = false;
@@ -454,11 +479,15 @@ class CommandProcessor {
   // The logical report stays open and a new segment will open at the next
   // opportunity.
   void CloseQuerySegment();
+  // Splits the open segment when the draw scale changes so each segment
+  // normalizes with one scale.
+  void UpdateZPDScale(uint32_t scale_area);
 
   // Called by backends when a host query resolve completes.  Accumulates
-  // the raw sample count, and if all segments are done, commits the report
-  // to guest memory.
-  void OnZPDQueryResolved(ReportHandle report_handle, uint64_t raw_samples);
+  // the normalized sample count, and if all segments are done, commits the
+  // report to guest memory.
+  void OnZPDQueryResolved(ReportHandle report_handle, uint64_t raw_samples,
+                          uint32_t scale_area);
 
   // Writes guest report with begin_value read from guest memory.
   // Orphan END path only when no controller snapshot is available.
@@ -470,8 +499,8 @@ class CommandProcessor {
   // again. Gives up after kStrictZPDRetireMaxStalls.
   void PumpPendingRetire();
 
-  // Divides host count by draw resolution scale.
-  uint32_t NormalizeSampleCount(uint64_t samples) const;
+  // Divides a segment's host count by the scale area it ran under.
+  static uint32_t NormalizeSampleCount(uint64_t samples, uint32_t scale_area);
 
   // Writes the final report to guest memory and advances the slot running
   // total.  Called when a report fully resolves or is abandoned.
@@ -563,6 +592,12 @@ class CommandProcessor {
   uint32_t zpd_draw_resolution_scale_y() const {
     return zpd_draw_resolution_scale_y_;
   }
+  // Scale area for the segment being closed.
+  uint32_t GetZPDScaleArea() const {
+    return zpd_active_segment_.scale_area
+               ? zpd_active_segment_.scale_area
+               : zpd_draw_resolution_scale_x_ * zpd_draw_resolution_scale_y_;
+  }
 
   uint32_t fake_zpd_sample_count_ = 0;
   ZPDStats zpd_stats_;
@@ -606,6 +641,10 @@ class CommandProcessor {
 
   Shader* active_vertex_shader_ = nullptr;
   Shader* active_pixel_shader_ = nullptr;
+  // Guest physical address the active vertex shader's ucode was loaded from,
+  // for reading it back from shared memory (the ucode interpreter placeholder).
+  // 0 if unknown (loaded immediately, embedded in the command buffer).
+  uint32_t active_vertex_shader_ucode_address_ = 0;
 
   std::atomic<bool> paused_{false};
   std::unique_ptr<xe::threading::Event> pause_resume_event_;

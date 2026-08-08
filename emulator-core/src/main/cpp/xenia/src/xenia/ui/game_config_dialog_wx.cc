@@ -401,6 +401,19 @@ void GameConfigDialog::LoadOverrides() {
     config_var->LoadConfigValue(node.node());
     std::string value = StripTomlQuotes(config_var->config_value());
     config_var->RestoreConfigValueState(saved);
+    // Evict an override whose value is no longer a valid option for an enum
+    // cvar (e.g. one we renamed): drop the row so it is not saved back, letting
+    // the setting fall back to its default instead of pinning a bogus override.
+    const auto& enums = xe::ui::GetKnownEnumOptions();
+    auto enum_it = enums.find(config_var->name());
+    if (enum_it != enums.end()) {
+      const std::string display =
+          xe::ui::IntCvarValueToDisplayName(config_var->name(), value);
+      if (std::find(enum_it->second.begin(), enum_it->second.end(), display) ==
+          enum_it->second.end()) {
+        continue;
+      }
+    }
     rows.emplace(config_var->name(), value);
   }
   for (const auto& [k, v] : rows) {

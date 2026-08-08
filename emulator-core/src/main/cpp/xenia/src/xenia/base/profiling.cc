@@ -42,6 +42,12 @@
 #include "xenia/ui/window.h"
 
 #if XE_OPTION_PROFILING
+#include <cstdio>
+#include <mutex>
+#include <unordered_map>
+#endif
+
+#if XE_OPTION_PROFILING
 #include "third_party/microprofile/microprofileui.h"
 #endif  // XE_OPTION_PROFILING
 
@@ -56,6 +62,36 @@ DEFINE_bool(show_profiler, false, "Show profiling UI by default.", "UI");
 namespace xe {
 
 #if XE_OPTION_PROFILING
+
+MicroProfileToken GetGuestFunctionToken(uint32_t guest_address) {
+  // Thread-local cache keeps the hot path lock-free. This is called per guest
+  // function under FTrace, so the global lock is hit only on the first lookup
+  // of an address on each thread.
+  thread_local std::unordered_map<uint32_t, MicroProfileToken> local;
+  auto local_it = local.find(guest_address);
+  if (local_it != local.end()) {
+    return local_it->second;
+  }
+
+  static std::mutex mutex;
+  static std::unordered_map<uint32_t, MicroProfileToken> tokens;
+  MicroProfileToken token;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = tokens.find(guest_address);
+    if (it != tokens.end()) {
+      token = it->second;
+    } else {
+      char name[16];
+      std::snprintf(name, sizeof(name), "%08X", guest_address);
+      token = MicroProfileGetToken("guestfn", name, Profiler::GetColor(name),
+                                   MicroProfileTokenTypeCpu);
+      tokens.emplace(guest_address, token);
+    }
+  }
+  local.emplace(guest_address, token);
+  return token;
+}
 
 Profiler::ProfilerWindowInputListener Profiler::input_listener_;
 size_t Profiler::z_order_ = 0;

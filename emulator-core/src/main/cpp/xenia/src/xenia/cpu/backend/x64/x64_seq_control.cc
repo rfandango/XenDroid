@@ -76,6 +76,15 @@ struct DEBUG_BREAK : Sequence<DEBUG_BREAK, I<OPCODE_DEBUG_BREAK, VoidOp>> {
 EMITTER_OPCODE_TABLE(OPCODE_DEBUG_BREAK, DEBUG_BREAK);
 
 // ============================================================================
+// OPCODE_CHECK_PREEMPT
+// ============================================================================
+struct CHECK_PREEMPT
+    : Sequence<CHECK_PREEMPT, I<OPCODE_CHECK_PREEMPT, VoidOp>> {
+  static void Emit(X64Emitter& e, const EmitArgType&) { e.EmitPreemptCheck(); }
+};
+EMITTER_OPCODE_TABLE(OPCODE_CHECK_PREEMPT, CHECK_PREEMPT);
+
+// ============================================================================
 // OPCODE_DEBUG_BREAK_TRUE
 // ============================================================================
 struct DEBUG_BREAK_TRUE_I8

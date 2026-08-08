@@ -83,6 +83,16 @@ class VulkanSharedMemory : public SharedMemory {
   bool ReadHostMapped(uint32_t guest_address, uint32_t length,
                       void* dest) const;
 
+  // A host-imported (guest RAM) copy of the buffer, or VK_NULL_HANDLE if
+  // unavailable. Bound instead of buffer() for memexport-touching draws so
+  // their output is coherent with the CPU (no clobber) - it aliases guest RAM.
+  VkBuffer host_buffer() const { return host_buffer_; }
+
+  // True when the buffer aliases guest RAM directly
+  // (VK_EXT_external_memory_host import). Uploads and memexport readback copies
+  // are then unnecessary.
+  bool is_zero_copy() const { return zero_copy_; }
+
   // Returns true if any downloads were submitted to the command processor.
   bool InitializeTraceSubmitDownloads();
   void InitializeTraceCompleteDownloads();
@@ -102,10 +112,29 @@ class VulkanSharedMemory : public SharedMemory {
   TraceWriter& trace_writer_;
   VkPipelineStageFlags guest_shader_pipeline_stages_;
 
+  // Creates a non-sparse buffer bound to imported guest RAM
+  // (VK_EXT_external_memory_host). Returns true and fills out_buffer/out_memory
+  // on success; false (nothing to clean up) otherwise.
+  bool CreateImportedGuestRamBuffer(VkBuffer& out_buffer,
+                                    VkDeviceMemory& out_memory);
+  // Attempts to alias guest RAM as the whole buffer (full zero-copy). Returns
+  // true on success (buffer_/buffer_memory_ populated, zero_copy_ set); false
+  // to fall back to the normal device-local path.
+  bool TryInitializeZeroCopy();
+  // Attempts to create host_buffer_ for the hybrid two-buffer path. No-op on
+  // failure (host_buffer_ stays null).
+  void TryInitializeHostBuffer();
+
   VkBuffer buffer_ = VK_NULL_HANDLE;
   uint32_t buffer_memory_type_;
   // Single for non-sparse, every allocation so far for sparse.
   std::vector<VkDeviceMemory> buffer_memory_;
+  // Buffer memory is imported guest RAM - no uploads or readback copies needed.
+  bool zero_copy_ = false;
+
+  // Second buffer aliasing guest RAM, bound for memexport-touching draws.
+  VkBuffer host_buffer_ = VK_NULL_HANDLE;
+  VkDeviceMemory host_buffer_memory_ = VK_NULL_HANDLE;
 
   // Persistent host mapping of the dense buffer for direct CPU readback
   // (readback_resolve=uma). Null unless the buffer is a single host-visible
@@ -118,6 +147,8 @@ class VulkanSharedMemory : public SharedMemory {
 
   std::unique_ptr<ui::vulkan::VulkanUploadBufferPool> upload_buffer_pool_;
   std::vector<VkBufferCopy> upload_regions_;
+  // Upload ranges left after the memexport ones are refreshed on the GPU.
+  std::vector<std::pair<uint32_t, uint32_t>> cpu_upload_ranges_;
 
   // Created temporarily, only for downloading.
   VkBuffer trace_download_buffer_ = VK_NULL_HANDLE;

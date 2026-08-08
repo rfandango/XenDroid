@@ -995,8 +995,8 @@ void MetalCommandProcessor::InvalidateGpuMemory() {
 }
 
 void MetalCommandProcessor::ClearReadbackBuffers() {
-  // TODO(wmarti): Implement readback buffer clearing when memexport readback
-  // is added. See D3D12's readback_buffers_ and memexport_readback_buffers_.
+  // TODO(wmarti): Implement readback buffer clearing when resolve readback
+  // is added. See D3D12's readback_buffers_.
 }
 
 ui::metal::MetalProvider& MetalCommandProcessor::GetMetalProvider() const {
@@ -5638,9 +5638,8 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
       regs.Get<float>(XE_GPU_REG_VGT_HOS_MIN_TESS_LEVEL) + 1.0f;
   spirv_system_constants_.tessellation_factor_range[1] =
       regs.Get<float>(XE_GPU_REG_VGT_HOS_MAX_TESS_LEVEL) + 1.0f;
-  auto vgt_dma_size = regs.Get<reg::VGT_DMA_SIZE>();
   spirv_system_constants_.tessellation_vertex_index_endian =
-      static_cast<uint32_t>(vgt_dma_size.swap_mode);
+      static_cast<uint32_t>(index_endian);
   spirv_system_constants_.tessellation_vertex_index_offset =
       regs[XE_GPU_REG_VGT_INDX_OFFSET];
   spirv_system_constants_.tessellation_vertex_index_min_max[0] =

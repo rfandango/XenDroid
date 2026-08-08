@@ -30,6 +30,7 @@
 #include "xenia/base/platform.h"
 #include "xenia/base/threading.h"
 #include "xenia/base/xxhash.h"
+#include "xenia/gpu/guest_spirv_shader_cache.h"
 #include "xenia/gpu/primitive_processor.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
@@ -48,7 +49,7 @@ class VulkanCommandProcessor;
 
 // TODO(Triang3l): Create a common base for both the Vulkan and the Direct3D
 // implementations.
-class VulkanPipelineCache {
+class VulkanPipelineCache : public GuestSpirvShaderCache::Host {
  public:
   class PipelineLayoutProvider {
    public:
@@ -94,10 +95,39 @@ class VulkanPipelineCache {
     // at replay.
     std::atomic<VkPipeline> pipeline{VK_NULL_HANDLE};
     // The layouts are owned by the VulkanCommandProcessor, and must not be
-    // destroyed by it while the pipeline cache is active.
-    const PipelineLayoutProvider* pipeline_layout;
+    // destroyed by it while the pipeline cache is active. Atomic because an
+    // interpreter placeholder is created with a minimal (no-texture) layout on
+    // the draw thread, then upgraded to the real layout by the creation thread
+    // once the deferred shaders are translated (before the pipeline hot-swap).
+    // It is also the field the fork's deferred-bind model reads at draw time
+    // (starts at the minimal layout from untranslated shaders, upgraded to the
+    // real one by the creation thread) - the atomic serves both async models.
+    std::atomic<const PipelineLayoutProvider*> pipeline_layout;
+    // True while pipeline_layout still holds the minimal layout computed from
+    // shaders whose bindings weren't ready at insertion. Shaders can become
+    // ready before this entry's own job runs, so cache hits re-check and
+    // upgrade on the draw thread - otherwise a draw in that window allocates
+    // texture descriptors from a zero-binding layout.
+    std::atomic<bool> pipeline_layout_stale{false};
     // Pre-mapped dynamic-state values for this pipeline (see DynamicState).
     DynamicState dynamic_state;
+
+    // Placeholder pipeline support for reduced stutter (upstream model, used
+    // when the vulkan_placeholder_pipelines cvar is on; all stay inert - false /
+    // VK_NULL_HANDLE - when it is off and the deferred-bind model is used).
+    // When true, the current pipeline uses a placeholder pixel shader and
+    // the real pipeline is being compiled in the background.
+    std::atomic<bool> is_placeholder{false};
+    // When true, the placeholder rasterizes with the ucode interpreter VS (so
+    // the draw must feed it full float constants and the ucode location). Set
+    // once when the interpreter placeholder is built, gated by is_placeholder.
+    std::atomic<bool> uses_interpreter{false};
+    // The placeholder VkPipeline handle (VK_NULL_HANDLE if none). A draw
+    // compares the pipeline handle it bound against this to know whether it
+    // bound the placeholder - consistent with the single `pipeline` load,
+    // unlike the separate is_placeholder flag which is cleared a few
+    // instructions after the real pipeline is swapped in.
+    std::atomic<VkPipeline> placeholder_pipeline{VK_NULL_HANDLE};
 
     Pipeline(const PipelineLayoutProvider* pipeline_layout_provider)
         : pipeline_layout(pipeline_layout_provider), dynamic_state{} {}
@@ -105,14 +135,30 @@ class VulkanPipelineCache {
     // Copy constructor needed for unordered_map
     Pipeline(const Pipeline& other)
         : pipeline(other.pipeline.load(std::memory_order_acquire)),
-          pipeline_layout(other.pipeline_layout),
-          dynamic_state(other.dynamic_state) {}
+          pipeline_layout(
+              other.pipeline_layout.load(std::memory_order_acquire)),
+          pipeline_layout_stale(
+              other.pipeline_layout_stale.load(std::memory_order_acquire)),
+          dynamic_state(other.dynamic_state),
+          is_placeholder(other.is_placeholder.load(std::memory_order_acquire)),
+          uses_interpreter(
+              other.uses_interpreter.load(std::memory_order_acquire)),
+          placeholder_pipeline(
+              other.placeholder_pipeline.load(std::memory_order_acquire)) {}
 
     // Move constructor
     Pipeline(Pipeline&& other) noexcept
         : pipeline(other.pipeline.load(std::memory_order_acquire)),
-          pipeline_layout(other.pipeline_layout),
-          dynamic_state(other.dynamic_state) {}
+          pipeline_layout(
+              other.pipeline_layout.load(std::memory_order_acquire)),
+          pipeline_layout_stale(
+              other.pipeline_layout_stale.load(std::memory_order_acquire)),
+          dynamic_state(other.dynamic_state),
+          is_placeholder(other.is_placeholder.load(std::memory_order_acquire)),
+          uses_interpreter(
+              other.uses_interpreter.load(std::memory_order_acquire)),
+          placeholder_pipeline(
+              other.placeholder_pipeline.load(std::memory_order_acquire)) {}
 
     // Deleted copy assignment to prevent accidental copying
     Pipeline& operator=(const Pipeline&) = delete;
@@ -199,8 +245,16 @@ class VulkanPipelineCache {
       uint32_t normalized_color_mask,
       bool apply_polygon_offset_in_shader) const;
 
+  // The ucode interpreter placeholder defers translation by not calling this on
+  // the draw thread; the creation thread calls it (passing its own worker
+  // translator, since the shared one is single-threaded). nullptr uses the
+  // shared translator.
   bool EnsureShadersTranslated(VulkanShader::VulkanTranslation* vertex_shader,
-                               VulkanShader::VulkanTranslation* pixel_shader);
+                               VulkanShader::VulkanTranslation* pixel_shader,
+                               SpirvShaderTranslator* translator = nullptr);
+  // use_interpreter requests the ucode interpreter VS placeholder for a new,
+  // untranslated vertex shader (falls back to normal translation if the async
+  // placeholder path can't be taken for this draw).
   bool ConfigurePipeline(
       VulkanShader::VulkanTranslation* vertex_shader,
       VulkanShader::VulkanTranslation* pixel_shader,
@@ -208,15 +262,25 @@ class VulkanPipelineCache {
       reg::RB_DEPTHCONTROL normalized_depth_control,
       uint32_t normalized_color_mask,
       VulkanRenderTargetCache::RenderPassKey render_pass_key,
-      Pipeline** pipeline_out);
+      bool use_interpreter, Pipeline** pipeline_out);
+
+  // True while this draw must be fed the ucode interpreter's inputs (full float
+  // constants + ucode location). False once hot-swapped to the real VS.
+  static bool IsInterpreterPlaceholder(const Pipeline* pipeline) {
+    return pipeline->uses_interpreter.load(std::memory_order_acquire) &&
+           pipeline->is_placeholder.load(std::memory_order_acquire);
+  }
+
+  // Whether ConfigurePipeline will create the pipeline asynchronously (so the
+  // draw thread must not translate shaders itself). Matches the use_async
+  // condition inside ConfigurePipeline. has_pixel_shader because the async
+  // placeholder path needs a pixel shader.
+  bool CanCreatePipelineAsync(bool has_pixel_shader) const;
 
  private:
-  enum class PipelineGeometryShader : uint32_t {
-    kNone,
-    kPointList,
-    kRectangleList,
-    kQuadList,
-  };
+  // PipelineGeometryShader and GeometryShaderKey come from
+  // GuestSpirvShaderCache.
+  using GeometryShaderKey = GuestSpirvShaderCache::GeometryShaderKey;
 
   enum class PipelinePrimitiveTopology : uint32_t {
     kPointList,
@@ -381,41 +445,33 @@ class VulkanPipelineCache {
     }
   };
 
-  union GeometryShaderKey {
-    uint32_t key;
-    struct {
-      PipelineGeometryShader type : 2;
-      uint32_t interpolator_count : 5;
-      uint32_t has_user_clip_planes : 1;
-      uint32_t user_clip_plane_cull : 1;
-      uint32_t has_vertex_kill_and : 1;
-      uint32_t has_point_size : 1;
-      uint32_t has_point_coordinates : 1;
-    };
-
-    GeometryShaderKey() : key(0) { static_assert_size(*this, sizeof(key)); }
-
-    struct Hasher {
-      size_t operator()(const GeometryShaderKey& key) const {
-        return std::hash<uint32_t>{}(key.key);
-      }
-    };
-    bool operator==(const GeometryShaderKey& other_key) const {
-      return key == other_key.key;
-    }
-    bool operator!=(const GeometryShaderKey& other_key) const {
-      return !(*this == other_key);
-    }
-  };
-
-  // Can be called from multiple threads.
+  // Can be called from multiple threads. use_try_claim atomically claims the
+  // translation so concurrent callers (draw thread + creation threads)
+  // translate it exactly once, the losers waiting for the winner.
   bool TranslateAnalyzedShader(SpirvShaderTranslator& translator,
-                               VulkanShader::VulkanTranslation& translation);
+                               VulkanShader::VulkanTranslation& translation,
+                               bool use_try_claim = false);
 
   // Translates shaders in parallel for storage loading.
   void TranslateShadersForStorage(
       const std::set<std::pair<uint64_t, uint64_t>>& translations_needed,
       bool edram_fsi_used);
+
+  // Guest graphics pipeline layout for the given (translated) shaders. Binding
+  // counts come from translation, so untranslated shaders yield the minimal
+  // no-texture layout used by the interpreter placeholder. Thread-safe.
+  // counts_complete_out (optional) reports whether every consulted shader had
+  // its bindings ready, i.e. whether the returned layout is the real one.
+  const PipelineLayoutProvider* GetGuestGraphicsPipelineLayout(
+      const VulkanShader::VulkanTranslation* vertex_shader,
+      const VulkanShader::VulkanTranslation* pixel_shader,
+      bool* counts_complete_out = nullptr);
+  // Upgrades a cache-hit pipeline's layout on the draw thread once its
+  // shaders' bindings are ready, closing the window between translation
+  // finishing and the entry's own creation job running.
+  void RefreshPipelineLayoutIfStale(
+      Pipeline& pipeline, const VulkanShader::VulkanTranslation* vertex_shader,
+      const VulkanShader::VulkanTranslation* pixel_shader);
 
   void WritePipelineRenderTargetDescription(
       reg::RB_BLENDCONTROL blend_control, uint32_t write_mask,
@@ -432,12 +488,17 @@ class VulkanPipelineCache {
   // Whether the pipeline for the given description is supported by the device.
   bool ArePipelineRequirementsMet(const PipelineDescription& description) const;
 
-  static bool GetGeometryShaderKey(
-      PipelineGeometryShader geometry_shader_type,
-      SpirvShaderTranslator::Modification vertex_shader_modification,
-      SpirvShaderTranslator::Modification pixel_shader_modification,
-      GeometryShaderKey& key_out);
   VkShaderModule GetGeometryShader(GeometryShaderKey key);
+
+  // GuestSpirvShaderCache::Host.
+  std::unique_ptr<SpirvShaderTranslator> CreateTranslator() const override;
+  bool precise_interpolation_supported() const override;
+  bool depth_float24_round() const override {
+    return render_target_cache_.depth_float24_round();
+  }
+  bool depth_float24_convert_in_pixel_shader() const override {
+    return render_target_cache_.depth_float24_convert_in_pixel_shader();
+  }
 
   // Get the appropriate tessellation control shader (hull shader) module.
   VkShaderModule GetTessellationControlShader(
@@ -451,7 +512,26 @@ class VulkanPipelineCache {
   // Can be called from creation threads - all needed data must be fully set up
   // at the point of the call: shaders must be translated, pipeline layout and
   // render pass objects must be available.
+  // If fragment_shader_override is not VK_NULL_HANDLE, it is used instead of
+  // the pixel shader from creation_arguments (for placeholder pipelines).
+  // vertex_shader_override, if not VK_NULL_HANDLE, is used instead of the
+  // translated vertex shader module (for the ucode interpreter placeholder,
+  // whose guest VS is intentionally not translated yet).
   bool EnsurePipelineCreated(
+      const PipelineCreationArguments& creation_arguments,
+      VkShaderModule fragment_shader_override = VK_NULL_HANDLE,
+      VkShaderModule vertex_shader_override = VK_NULL_HANDLE);
+
+  // Creates a placeholder pipeline using the placeholder pixel shader.
+  // Used for pipeline hot-swap to reduce stutter.
+  bool EnsurePipelineCreatedWithPlaceholder(
+      const PipelineCreationArguments& creation_arguments) {
+    return EnsurePipelineCreated(creation_arguments, placeholder_pixel_shader_);
+  }
+
+  // Creates a placeholder pipeline that rasterizes the guest geometry via the
+  // ucode interpreter VS while the real VS+PS compile in the background.
+  bool EnsurePipelineCreatedWithInterpreterPlaceholder(
       const PipelineCreationArguments& creation_arguments);
 
   VulkanCommandProcessor& command_processor_;
@@ -485,8 +565,8 @@ class VulkanPipelineCache {
 
   // Temporary storage for AnalyzeUcode calls on the processor thread.
   StringBuffer ucode_disasm_buffer_;
-  // Reusable shader translator on the command processor thread.
-  std::unique_ptr<SpirvShaderTranslator> shader_translator_;
+  // Shared guest SPIR-V translator, modification derivation and geometry keys.
+  GuestSpirvShaderCache guest_shader_cache_;
 
   struct LayoutUID {
     size_t uid;
@@ -524,6 +604,17 @@ class VulkanPipelineCache {
   // backend's float24_{truncate,round}_ps.
   VkShaderModule float24_truncate_fragment_shader_ = VK_NULL_HANDLE;
   VkShaderModule float24_round_fragment_shader_ = VK_NULL_HANDLE;
+
+  // Placeholder pixel shader for pipeline hot-swap to reduce stutter.
+  // Outputs transparent black while the real shader compiles in background.
+  VkShaderModule placeholder_pixel_shader_ = VK_NULL_HANDLE;
+
+  // Ucode interpreter vertex shader - interprets a guest VS's ucode to render
+  // its real geometry while the real VS translates+compiles in the background.
+  VkShaderModule ucode_interpreter_vs_ = VK_NULL_HANDLE;
+  // Flat grey debug pixel shader for interpreter placeholders, so the interim
+  // geometry is visible (host-render-target path only).
+  VkShaderModule placeholder_color_pixel_shader_ = VK_NULL_HANDLE;
 
   // Tessellation shaders.
   // Vertex shaders for tessellation - pass indices/factors to TCS.

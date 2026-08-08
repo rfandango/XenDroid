@@ -10,6 +10,7 @@
 #ifndef XENIA_KERNEL_XFILE_H_
 #define XENIA_KERNEL_XFILE_H_
 
+#include <atomic>
 #include <mutex>
 #include <string>
 
@@ -186,9 +187,21 @@ class XFile : public XObject {
  private:
   XFile();
 
+  // Bodies run on the I/O worker via RunBlockingHostCall. All take file_lock_
+  // themselves except ReadInternal, which runs under one its caller holds.
   X_STATUS ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_length,
                         uint64_t byte_offset, uint32_t* out_bytes_read,
                         uint32_t apc_context, bool notify_completion);
+  X_STATUS QueryDirectoryInternal(X_FILE_DIRECTORY_INFORMATION* out_info,
+                                  size_t length,
+                                  const std::string_view file_name,
+                                  bool restart);
+  X_STATUS ReadScatterInternal(uint32_t segments_guest_address, uint32_t length,
+                               uint64_t byte_offset, uint32_t* out_bytes_read,
+                               uint32_t apc_context);
+  X_STATUS WriteInternal(uint32_t buffer_guest_address, uint32_t buffer_length,
+                         uint64_t byte_offset, uint32_t* out_bytes_written,
+                         uint32_t apc_context);
 
   vfs::File* file_ = nullptr;
   std::unique_ptr<threading::Event> async_event_ = nullptr;
@@ -199,7 +212,9 @@ class XFile : public XObject {
 
   // TODO(benvanik): create flags, open state, etc.
 
-  uint64_t position_ = 0;
+  // Atomic rather than under file_lock_, so querying the position while a read
+  // is offloaded does not stall the calling fiber's dispatch thread.
+  std::atomic<uint64_t> position_ = 0;
 
   xe::filesystem::WildcardEngine find_engine_;
   size_t find_index_ = 0;

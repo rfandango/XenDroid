@@ -70,6 +70,12 @@ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock,
 
 X_STATUS xeProcessUserApcs(PPCContext* ctx);
 
+// Runs queued kernel-mode APCs at the wait/yield/delay shims, alertable or
+// not, like the real kernel's next-boundary delivery. Wait-transparent, the
+// wait proceeds normally after. No-op above PASSIVE_LEVEL or when nested.
+// Returns true if any ran.
+bool xeProcessKernelApcs(PPCContext* ctx);
+
 void xeRundownApcs(PPCContext* ctx);
 uint32_t xeKeGetCurrentProcessType(PPCContext* context);
 void xeKeSetCurrentProcessType(uint32_t type, PPCContext* context);

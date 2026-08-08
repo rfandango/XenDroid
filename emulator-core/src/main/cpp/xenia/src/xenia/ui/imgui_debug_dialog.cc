@@ -59,6 +59,8 @@ DECLARE_bool(force_convert_quad_lists_to_triangle_lists);
 DECLARE_bool(force_convert_line_loops_to_strips);
 DECLARE_int32(log_level);
 DECLARE_uint32(log_mask);
+DECLARE_bool(log_high_frequency_kernel_calls);
+DECLARE_bool(clear_memory_page_state);
 DECLARE_bool(scribble_heap);
 DECLARE_int32(scribble_heap_value);
 DECLARE_bool(occlusion_query_log);
@@ -329,11 +331,13 @@ void ImGuiDebugDialog::LoadCurrentSettings() {
   force_convert_line_loops_to_strips_ =
       cvars::force_convert_line_loops_to_strips;
 
+  clear_memory_page_state_ = cvars::clear_memory_page_state;
   scribble_heap_ = cvars::scribble_heap;
   scribble_heap_value_ = cvars::scribble_heap_value;
 
   log_level_ = cvars::log_level;
   log_mask_ = cvars::log_mask;
+  log_high_frequency_kernel_calls_ = cvars::log_high_frequency_kernel_calls;
   occlusion_query_log_ = cvars::occlusion_query_log;
   gpu_debug_markers_ = cvars::gpu_debug_markers;
   disassemble_pm4_ = cvars::disassemble_pm4;
@@ -639,7 +643,8 @@ void ImGuiDebugDialog::OnDraw(ImGuiIO& io) {
       "mrt_edram_used_range_clamp_to_min",
       "value_convert_7e3_8888_reuse",
   });
-  bool show_memory = AnyMatchesFilter({"scribble_heap", "scribble_heap_value"});
+  bool show_memory = AnyMatchesFilter(
+      {"clear_memory_page_state", "scribble_heap", "scribble_heap_value"});
   bool show_depth = AnyMatchesFilter(
       {"depth_bias_shader_offset", "depth_float24_convert_in_pixel_shader",
        "depth_float24_round", "depth_transfer_not_equal_test"});
@@ -652,6 +657,7 @@ void ImGuiDebugDialog::OnDraw(ImGuiIO& io) {
   bool show_logging = AnyMatchesFilter({
       "log_level",
       "log_mask",
+      "log_high_frequency_kernel_calls",
       "occlusion_query_log",
       "gpu_debug_markers",
       "disassemble_pm4",
@@ -1008,6 +1014,18 @@ void ImGuiDebugDialog::OnDraw(ImGuiIO& io) {
       if (show_memory &&
           BeginSection("Memory / Boot Hacks", false, filter_active)) {
         if (BeginSettingsTable("##debug_memory_boot")) {
+          if (MatchesFilter("clear_memory_page_state")) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            DrawLabelCell("clear_memory_page_state");
+            ImGui::TableSetColumnIndex(1);
+            if (RightAlignedCheckbox("##clear_memory_page_state",
+                                     &clear_memory_page_state_)) {
+              ApplyBoolSetting("GPU", "clear_memory_page_state",
+                               clear_memory_page_state_);
+            }
+          }
+
           if (MatchesFilter("scribble_heap")) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -1250,6 +1268,18 @@ void ImGuiDebugDialog::OnDraw(ImGuiIO& io) {
               ApplyLogMask();
             } else if (ImGui::IsItemDeactivatedAfterEdit()) {
               ApplyLogMask();
+            }
+          }
+
+          if (MatchesFilter("log_high_frequency_kernel_calls")) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            DrawLabelCell("log_high_frequency_kernel_calls");
+            ImGui::TableSetColumnIndex(1);
+            if (RightAlignedCheckbox("##log_high_frequency_kernel_calls",
+                                     &log_high_frequency_kernel_calls_)) {
+              ApplyBoolSetting("Logging", "log_high_frequency_kernel_calls",
+                               log_high_frequency_kernel_calls_);
             }
           }
 

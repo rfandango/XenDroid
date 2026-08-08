@@ -13,7 +13,9 @@
 // Asio must be included before Windows headers to avoid macro conflicts
 #include <asio.hpp>
 
+#include <atomic>
 #include <cstring>
+#include <functional>
 #include <optional>
 #include <queue>
 
@@ -164,6 +166,18 @@ class XSocket : public XObject {
   // Private constructor for accepted sockets
   XSocket(KernelState* kernel_state, asio::ip::tcp::socket socket);
 
+  // Retry shape for RunCooperatively. A connect reports progress through error
+  // codes a transfer never sees, and receive and send pick different guest
+  // timeouts.
+  enum class RetryMode { kReceive, kSend, kConnect };
+
+  // Runs |attempt| so the guest still sees a blocking call while the host
+  // thread stays free. On a fiber the socket goes non-blocking and we park
+  // between attempts, otherwise |attempt| just runs once.
+  void RunCooperatively(asio::error_code& ec, RetryMode mode,
+                        const std::function<void()>& attempt);
+  void SetHostNonBlocking(bool enable);
+
   // Socket storage - either TCP or UDP
   std::optional<asio::ip::tcp::socket> tcp_socket_;
   std::optional<asio::ip::udp::socket> udp_socket_;
@@ -180,6 +194,16 @@ class XSocket : public XObject {
   uint16_t bound_port_ = 0;
 
   bool broadcast_socket_ = false;
+
+  // The guest's own FIONBIO/WSAEventSelect choice, tracked separately from the
+  // socket's live flag because RunCooperatively toggles that one itself.
+  bool guest_non_blocking_ = false;
+  // Cooperative operations in flight, so the last one out restores blocking.
+  std::atomic<uint32_t> cooperative_io_depth_{0};
+  // SO_RCVTIMEO / SO_SNDTIMEO in ms, 0 for none. Enforced by RunCooperatively,
+  // since the host option has no effect on a non-blocking socket.
+  uint32_t recv_timeout_ms_ = 0;
+  uint32_t send_timeout_ms_ = 0;
 
   // Last error code for this socket
   mutable uint32_t last_error_ = 0;

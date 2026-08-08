@@ -481,6 +481,7 @@ class CodeCacheBase : public CodeCache {
           generated_code_write_base_ + generated_code_offset_;
 
       size_t high_mark = generated_code_offset_;
+      CheckCapacity(high_mark);
 
       generated_code_map_.emplace_back(
           (uint64_t(code_execute_address - generated_code_execute_base_)
@@ -548,6 +549,7 @@ class CodeCacheBase : public CodeCache {
       data_address = generated_code_write_base_ + generated_code_offset_;
       generated_code_offset_ += xe::round_up(length, 16);
       high_mark = generated_code_offset_;
+      CheckCapacity(high_mark);
     }
     EnsureCommitted(high_mark);
 #if XE_PLATFORM_MAC && XE_ARCH_ARM64
@@ -646,6 +648,8 @@ class CodeCacheBase : public CodeCache {
   uint8_t* generated_code_execute_base_ = nullptr;
   uint8_t* generated_code_write_base_ = nullptr;
   size_t generated_code_offset_ = 0;
+  // Last 64 MiB step logged by CheckCapacity.
+  size_t capacity_log_mark_ = 0;
   std::atomic<size_t> generated_code_commit_mark_ = {0};
   std::vector<std::pair<uint64_t, GuestFunction*>> generated_code_map_;
 
@@ -659,6 +663,25 @@ class CodeCacheBase : public CodeCache {
 
  private:
   Derived& self() { return static_cast<Derived&>(*this); }
+
+  // The code region is a fixed-size view and the allocator above is an
+  // unchecked bump; committing past its end MAP_FIXEDs over whatever the OS
+  // placed there and corrupts the process silently, so overflow must be loud.
+  // The high-water logging shows a translation storm before it crashes.
+  void CheckCapacity(size_t high_mark) {
+    if (high_mark > kGeneratedCodeSize) {
+      xe::FatalError(fmt::format(
+          "JIT code cache exhausted: {} of {} bytes used. This is a hard cap; "
+          "translation cannot continue safely.",
+          high_mark, kGeneratedCodeSize));
+    }
+    constexpr size_t kLogStep = 64 * 1024 * 1024;
+    if (high_mark / kLogStep > capacity_log_mark_) {
+      capacity_log_mark_ = high_mark / kLogStep;
+      XELOGW("JIT code cache high-water mark: {} MiB of {} MiB",
+             high_mark >> 20, kGeneratedCodeSize >> 20);
+    }
+  }
 
   void EnsureCommitted(size_t high_mark) {
     using namespace xe::literals;

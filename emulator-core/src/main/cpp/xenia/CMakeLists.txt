@@ -299,10 +299,16 @@ if(MSVC)
     add_link_options($<$<CONFIG:Release>:/LTCG>)
     set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
   endif()
-  # Release has no PDB.
-  string(REPLACE "/Zi" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
-  string(REPLACE "/Zi" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-  string(REPLACE "/DEBUG" "" CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}")
+  # Release emits a PDB so optimized crashes symbolize in a debugger. /DEBUG
+  # would disable REF/ICF folding and force incremental linking, so re-assert
+  # them to keep the optimized layout and size.
+  add_compile_options($<$<CONFIG:Release>:/Z7>)
+  add_link_options(
+    $<$<CONFIG:Release>:/DEBUG>
+    $<$<CONFIG:Release>:/OPT:REF>
+    $<$<CONFIG:Release>:/OPT:ICF>
+    $<$<CONFIG:Release>:/INCREMENTAL:NO>
+  )
 
 else()
   # GCC/Clang (Linux)

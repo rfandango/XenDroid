@@ -31,9 +31,9 @@ struct LibraryPath {
 struct LibraryEntry {
   uint32_t title_id = 0;
   std::string name;
-  std::vector<LibraryPath> paths;  // always >= 1; exactly one is default
+  std::vector<LibraryPath> paths;  // exactly one is default when non-empty
 
-  // Path launched on double-click: the flagged default, else the first.
+  // The flagged default, else the first. Precondition: paths is non-empty.
   const LibraryPath& default_path() const;
 };
 
@@ -59,6 +59,18 @@ class GameLibrary {
   // deduped, and persists. False on a dup, title_id 0, or empty path.
   bool AddDisc(uint32_t title_id, const std::string& name,
                const std::filesystem::path& path, const std::string& label);
+
+  // Promotes `path` to the title's default (double-click launch) disc and
+  // persists. No-op if it is already default. False if the title or path is
+  // unknown.
+  bool SetDefaultPath(uint32_t title_id, const std::filesystem::path& path);
+
+  // Drops `path` from `title_id` and persists. False if it has no such path.
+  bool RemovePath(uint32_t title_id, const std::filesystem::path& path);
+
+  // Drops any of `title_id`'s discs whose file no longer exists and persists.
+  // False if the title is unknown or nothing was missing.
+  bool PruneMissingPaths(uint32_t title_id);
 
   // Writes <root>/<title_id>/icon.png.
   bool SetIcon(uint32_t title_id, std::span<const uint8_t> png);

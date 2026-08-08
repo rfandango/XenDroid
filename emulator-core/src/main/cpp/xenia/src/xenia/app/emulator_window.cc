@@ -37,6 +37,7 @@
 #include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/config.h"
 #include "xenia/kernel/xconfig.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/graphics_provider.h"
@@ -57,10 +58,10 @@ DECLARE_string(hid);
 DECLARE_bool(guide_button);
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(memexport_await_fences);
 
 DECLARE_string(readback_resolve);
 
-DECLARE_bool(readback_memexport);
 
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
@@ -1537,14 +1538,26 @@ void EmulatorWindow::GamepadHotKeys() {
 }
 
 void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
+  const char* cvar_name = nullptr;
+  bool new_value = false;
+
   switch (setting) {
     case GPUSetting::ClearMemoryPageState:
-      SaveGPUSetting(GPUSetting::ClearMemoryPageState,
-                     !cvars::clear_memory_page_state);
+      new_value = !cvars::clear_memory_page_state;
+      SaveGPUSetting(GPUSetting::ClearMemoryPageState, new_value);
+      cvar_name = "clear_memory_page_state";
       break;
-    case GPUSetting::ReadbackMemexport:
-      SaveGPUSetting(GPUSetting::ReadbackMemexport, !cvars::readback_memexport);
+    case GPUSetting::MemexportAwaitFences:
+      new_value = !cvars::memexport_await_fences;
+      SaveGPUSetting(GPUSetting::MemexportAwaitFences, new_value);
+      cvar_name = "memexport_await_fences";
       break;
+  }
+
+  // Persist to the per-game config through the fork's helper, which already
+  // does upstream's load/insert/save and the title-open check.
+  if (cvar_name) {
+    config::SaveGameConfigSetting(emulator_, "GPU", cvar_name, new_value);
   }
 }
 
@@ -1560,19 +1573,19 @@ void EmulatorWindow::CycleReadbackResolve() {
     return;
   }
 
-  // Edge moved SetReadbackResolveMode onto CommandProcessor and switched it
-  // from a string to the ReadbackResolveMode enum. Preserve the original
-  // cycle order: fast -> full -> none -> fast.
-  const std::string& current = cvars::readback_resolve;
-  if (current == "fast") {
-    command_processor->SetReadbackResolveMode(
-        gpu::ReadbackResolveMode::kFull);
-  } else if (current == "full") {
-    command_processor->SetReadbackResolveMode(
-        gpu::ReadbackResolveMode::kDisabled);
-  } else {
-    command_processor->SetReadbackResolveMode(
-        gpu::ReadbackResolveMode::kFast);
+  gpu::ReadbackResolveMode current =
+      command_processor->GetReadbackResolveMode();
+  gpu::ReadbackResolveMode next;
+  switch (current) {
+    case gpu::ReadbackResolveMode::kDisabled:
+      next = gpu::ReadbackResolveMode::kFast;
+      break;
+    case gpu::ReadbackResolveMode::kFast:
+      next = gpu::ReadbackResolveMode::kAll;
+      break;
+    default:
+      next = gpu::ReadbackResolveMode::kDisabled;
+      break;
   }
 }
 
@@ -1823,7 +1836,7 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
 
 void EmulatorWindow::ClearDialogs() {
   imgui_drawer_.get()->ClearDialogs();
-  emulator_->kernel_state()->xam_state()->xam_dialogs_shown_ = 0;
+  emulator_->kernel_state()->xam_state()->is_xam_dialog_present_.store(false);
 }
 
 }  // namespace app

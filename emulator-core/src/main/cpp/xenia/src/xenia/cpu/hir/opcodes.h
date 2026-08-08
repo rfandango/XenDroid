@@ -300,6 +300,8 @@ enum Opcode {
   // via contention. No guest-visible effects whatsoever (no context, memory,
   // or flag changes).
   OPCODE_SPIN_BACKOFF,
+  OPCODE_LOAD_BARRIER,
+  OPCODE_CHECK_PREEMPT,
 
   __OPCODE_MAX_VALUE,  // Keep at end.
 };

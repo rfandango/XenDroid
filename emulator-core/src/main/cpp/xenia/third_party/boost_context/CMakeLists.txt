@@ -26,8 +26,14 @@ if(WIN32)
       set(_bc_variant "arm64_aapcs_pe_armclang.S")
       set(_bc_asm_lang ASM)
     else()
+      # ASM_MARMASM is CMake's built-in Microsoft armasm64 language (3.26+),
+      # the submodule's homegrown ASM_ARMASM modules predate it and lack the
+      # linker-information files newer CMake demands.
+      if(CMAKE_VERSION VERSION_LESS 3.26)
+        message(FATAL_ERROR "Windows ARM64 requires CMake 3.26+ for ASM_MARMASM")
+      endif()
       set(_bc_variant "arm64_aapcs_pe_armasm.asm")
-      set(_bc_asm_lang ASM_ARMASM)
+      set(_bc_asm_lang ASM_MARMASM)
     endif()
   else()
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")

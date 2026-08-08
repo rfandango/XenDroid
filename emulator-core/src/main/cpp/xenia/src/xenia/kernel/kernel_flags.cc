@@ -21,16 +21,15 @@ DEFINE_bool(headless, false,
 DEFINE_bool(log_high_frequency_kernel_calls, false,
             "Log kernel calls with the kHighFrequency tag.", "Logging");
 DEFINE_bool(
-    guest_scheduler, false,
+    guest_scheduler, true,
     "Run guest threads as cooperative fibers driven by an in-kernel scheduler "
-    "instead of mapping each to its own host OS thread. Experimental; off by "
-    "default. Requires a restart to take effect.",
+    "instead of mapping each to its own host OS thread. Requires a restart to "
+    "take effect.",
     "Kernel");
+UPDATE_from_bool(guest_scheduler, 2026, 8, 1, 13, false);
 DEFINE_uint32(
-    guest_scheduler_cpus, 6,
-    "Number of host dispatch threads the cooperative scheduler spreads the "
-    "360's 6 logical CPUs across (clamped to 1-6). 6 is one per guest CPU "
-    "(full "
-    "parallelism), 3 is one per physical core (SMT pairs share a thread), 1 is "
-    "all guest threads cooperative on a single thread. Requires a restart.",
+    guest_scheduler_quantum_us, 1000,
+    "Cooperative-scheduler timeslice in microseconds. A guest fiber running "
+    "this long yields at its next JIT safepoint so co-resident fibers on the "
+    "same dispatch thread make progress. Lower is fairer but switches more.",
     "Kernel");

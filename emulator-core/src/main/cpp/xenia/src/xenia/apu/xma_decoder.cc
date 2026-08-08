@@ -233,6 +233,12 @@ void XmaDecoder::WorkerThreadMain() {
                                     : std::chrono::steady_clock::time_point{};
     for (uint32_t n = 0; n < kContextCount; n++) {
       bool worked = contexts_[n]->Work();
+      if (!worked && contexts_[n]->is_enabled() &&
+          !contexts_[n]->is_allocated()) {
+        // Consume a kick on an unallocated context so its kicker is released.
+        contexts_[n]->set_is_enabled(false);
+        worked = true;
+      }
       if (worked) {
         // After Work() wrote the guest-visible context data back.
         contexts_[n]->CompleteConsumedKick();

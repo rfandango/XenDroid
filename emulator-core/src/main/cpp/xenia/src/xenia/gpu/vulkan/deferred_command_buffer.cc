@@ -20,6 +20,11 @@
 #include "xenia/gpu/vulkan/vulkan_command_processor.h"
 #include "xenia/ui/vulkan/vulkan_instance.h"
 
+#include "xenia/base/cvar.h"
+#include "xenia/base/logging.h"
+
+DECLARE_bool(log_gpu_frame_time_breakdown);
+
 DEFINE_bool(vulkan_deferred_cmd_size_cursor, true,
             "Track the deferred command buffer's recorded length with a size "
             "cursor over a geometrically grown buffer instead of resizing the "
@@ -43,6 +48,13 @@ void DeferredCommandBuffer::Reset() {
   if (!use_size_cursor_) {
     command_stream_.clear();
   }
+  // The recorded arguments are gone; a stale patch handle would write into a
+  // future command's storage.
+  render_area_patch_offset_ = kNoRenderAreaPatch;
+  pass_drawn_width_ = 0;
+  pass_drawn_height_ = 0;
+  pass_recorded_draws_ = 0;
+  current_scissor_ = {};
 }
 
 void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
@@ -659,6 +671,7 @@ void DeferredCommandBuffer::CmdVkBeginRendering(
   args.color_attachment_count = rendering_info->colorAttachmentCount;
   args.has_depth_attachment = rendering_info->pDepthAttachment != nullptr;
   args.has_stencil_attachment = rendering_info->pStencilAttachment != nullptr;
+  BeginRenderAreaTracking(arguments_size, /*dynamic_rendering=*/true);
 
   if (rendering_info->colorAttachmentCount) {
     std::memcpy(args_ptr + color_attachments_offset,
@@ -675,6 +688,61 @@ void DeferredCommandBuffer::CmdVkBeginRendering(
     std::memcpy(args_ptr + stencil_attachment_offset,
                 rendering_info->pStencilAttachment,
                 sizeof(VkRenderingAttachmentInfo));
+  }
+}
+
+static uint32_t xe_shrink_logged = 0;
+
+void DeferredCommandBuffer::ShrinkRenderAreaToDrawn(
+    uint32_t granularity_width, uint32_t granularity_height) {
+  if (render_area_patch_offset_ == kNoRenderAreaPatch) {
+    return;
+  }
+  const size_t patch_offset = render_area_patch_offset_;
+  // One-shot: a pass is finalized once, and the handle must not survive into
+  // the next pass or across a Reset().
+  render_area_patch_offset_ = kNoRenderAreaPatch;
+  if (!pass_recorded_draws_ || !pass_drawn_width_ || !pass_drawn_height_) {
+    // Nothing rasterized into the pass (or only load/store work) - the full
+    // extent is the only safe answer.
+    if (cvars::log_gpu_frame_time_breakdown && xe_shrink_logged < 200) {
+      ++xe_shrink_logged;
+      XELOGI("VkShrink: kept full extent (draws={} w={} h={})",
+             pass_recorded_draws_, pass_drawn_width_, pass_drawn_height_);
+    }
+    return;
+  }
+  assert_true(patch_offset < command_stream_size_);
+  VkRect2D* render_area;
+  if (render_area_patch_dynamic_) {
+    render_area = &reinterpret_cast<ArgsVkBeginRendering*>(
+                       command_stream_.data() + patch_offset)
+                       ->render_area;
+  } else {
+    render_area = &reinterpret_cast<ArgsVkBeginRenderPass*>(
+                       command_stream_.data() + patch_offset)
+                       ->render_area;
+  }
+  uint32_t width = pass_drawn_width_;
+  uint32_t height = pass_drawn_height_;
+  if (granularity_width > 1) {
+    width = xe::round_up(width, granularity_width);
+  }
+  if (granularity_height > 1) {
+    height = xe::round_up(height, granularity_height);
+  }
+  // Offsets stay at the recorded origin; only ever shrink.
+  const uint32_t was_w = render_area->extent.width;
+  const uint32_t was_h = render_area->extent.height;
+  render_area->extent.width = std::min(width, render_area->extent.width);
+  render_area->extent.height = std::min(height, render_area->extent.height);
+  // Only the large passes matter here; startup floods the log otherwise.
+  if (cvars::log_gpu_frame_time_breakdown && was_h >= 2000 &&
+      xe_shrink_logged < 200) {
+    ++xe_shrink_logged;
+    XELOGI("VkShrink: {}x{} -> {}x{} ({} draws, dynamic={})", was_w, was_h,
+           render_area->extent.width, render_area->extent.height,
+           pass_recorded_draws_, render_area_patch_dynamic_ ? 1 : 0);
   }
 }
 

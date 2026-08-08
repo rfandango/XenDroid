@@ -136,6 +136,25 @@ bool VirtualFileSystem::ResolveSymbolicLink(const std::string_view path,
   return was_resolved;
 }
 
+namespace {
+
+// A mount path matches only on a whole path component. Without this a device
+// mounted at ...\Content also swallows ...\Content_Eng.
+bool MountPathMatches(const std::string_view path,
+                      const std::string_view mount_path) {
+  if (mount_path.empty() || !xe::utf8::starts_with_case(path, mount_path)) {
+    return false;
+  }
+  // Mounts ending in a delimiter already sit on a component boundary.
+  const char last = mount_path.back();
+  if (last == '\\' || last == ':') {
+    return true;
+  }
+  return path.size() == mount_path.size() || path[mount_path.size()] == '\\';
+}
+
+}  // namespace
+
 Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
   auto global_lock = global_critical_region_.Acquire();
 
@@ -148,12 +167,17 @@ Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
     normalized_path = resolved_path;
   }
 
-  // Find the device.
-  auto it =
-      std::find_if(devices_.cbegin(), devices_.cend(), [&](const auto& d) {
-        return xe::utf8::starts_with_case(normalized_path, d->mount_path());
-      });
-  if (it == devices_.cend()) {
+  // Find the device with the longest matching mount path. Devices nest, e.g.
+  // \Device\Harddisk0\Partition1\Content lives inside \Device\Harddisk0, so the
+  // most specific mount must win regardless of registration order.
+  Device* device = nullptr;
+  for (const auto& d : devices_) {
+    if (MountPathMatches(normalized_path, d->mount_path()) &&
+        (!device || d->mount_path().size() > device->mount_path().size())) {
+      device = d.get();
+    }
+  }
+  if (!device) {
     // Supress logging the error for ShaderDumpxe:\CompareBackEnds as this is
     // not an actual problem nor something we care about.
     if (path != "ShaderDumpxe:\\CompareBackEnds") {
@@ -162,7 +186,6 @@ Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
     return nullptr;
   }
 
-  const auto& device = *it;
   auto relative_path = normalized_path.substr(device->mount_path().size());
   return device->ResolvePath(relative_path);
 }

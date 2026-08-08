@@ -12,6 +12,7 @@
 #include "xenia/apu/audio_system.h"
 #include "xenia/apu/xma_context.h"
 #include "xenia/base/logging.h"
+#include "xenia/kernel/guest_scheduler.h"
 
 extern "C" {
 #if XE_COMPILER_MSVC
@@ -370,7 +371,10 @@ void AudioMediaPlayer::Stop(bool change_state, bool force) {
   active_song_ = nullptr;
 
   if (!force) {
-    processing_end_fence_.Wait();
+    // Reachable from the guest XMP shim, so on a fiber this must park rather
+    // than block: a plain fence wait would stall the whole dispatch CPU,
+    // including the fibers that could satisfy it.
+    kernel::GuestScheduler::WaitOnFence(processing_end_fence_);
   }
 
   if (change_state) {

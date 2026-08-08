@@ -200,6 +200,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   bool ext_1_3_EXT_shader_demote_to_helper_invocation = false;
   bool ext_1_3_KHR_dynamic_rendering = false;
   bool ext_EXT_non_seamless_cube_map = false;
+  bool ext_EXT_custom_border_color = false;
   bool ext_1_3_EXT_subgroup_size_control = false;
   bool ext_KHR_fragment_shader_barycentric = false;
   bool ext_NV_fragment_shader_barycentric = false;
@@ -233,6 +234,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
           EXT_shader_demote_to_helper_invocation, 1, 3)
       // #423.
       XE_UI_VULKAN_LOCAL_EXTENSION(EXT_non_seamless_cube_map)
+      // #288. Custom sampler border colors (for YCbCr border colors).
+      XE_UI_VULKAN_LOCAL_EXTENSION(EXT_custom_border_color)
       // #226.
       XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(EXT_subgroup_size_control, 1, 3)
       // #322 (KHR) / #203 (NV). Barycentric coordinates for manual
@@ -250,6 +253,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     // #342. Driver-side fault description after VK_ERROR_DEVICE_LOST.
     if (get_physical_device_properties2_supported) {
       XE_UI_VULKAN_STRUCT_EXTENSION(EXT_device_fault)
+    }
+    // #179. Import guest RAM as device memory for a zero-copy shared-memory
+    // buffer that aliases guest RAM.
+    if (get_physical_device_properties2_supported) {
+      XE_UI_VULKAN_STRUCT_EXTENSION(EXT_external_memory_host)
     }
   }
 
@@ -359,6 +367,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT,
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NON_SEAMLESS_CUBE_MAP_FEATURES_EXT>
       features_EXT_non_seamless_cube_map;
+  VulkanFeatures<
+      VkPhysicalDeviceCustomBorderColorFeaturesEXT,
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT>
+      features_EXT_custom_border_color;
   VulkanFeatures<VkPhysicalDeviceDynamicRenderingFeatures,
                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES>
       features_1_3_KHR_dynamic_rendering;
@@ -396,6 +408,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   VkPhysicalDeviceExtendedDynamicState3PropertiesEXT
       properties_EXT_extended_dynamic_state3 = {
           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_PROPERTIES_EXT};
+  // VK_EXT_external_memory_host (#179) properties (host pointer import
+  // alignment).
+  VkPhysicalDeviceExternalMemoryHostPropertiesEXT
+      properties_EXT_external_memory_host = {
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
 
   if (get_physical_device_properties2_supported) {
     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
@@ -449,6 +466,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       features_EXT_non_seamless_cube_map.Link(supported_features_2,
                                               device_create_info);
     }
+    if (ext_EXT_custom_border_color) {
+      features_EXT_custom_border_color.Link(supported_features_2,
+                                            device_create_info);
+    }
     // Subgroup properties are Vulkan 1.1 core.
     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
       properties_subgroup.pNext = properties_2.pNext;
@@ -479,6 +500,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
                                                 device_create_info);
       properties_EXT_extended_dynamic_state3.pNext = properties_2.pNext;
       properties_2.pNext = &properties_EXT_extended_dynamic_state3;
+    }
+    if (device->extensions_.ext_EXT_external_memory_host) {
+      properties_EXT_external_memory_host.pNext = properties_2.pNext;
+      properties_2.pNext = &properties_EXT_external_memory_host;
     }
     ifn.vkGetPhysicalDeviceProperties2(physical_device, &properties_2);
     ifn.vkGetPhysicalDeviceFeatures2(physical_device, &supported_features_2);
@@ -926,6 +951,15 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     }
   }
 
+  if (ext_EXT_custom_border_color) {
+    if (with_gpu_emulation) {
+      XE_UI_VULKAN_FEATURE_2(features_EXT_custom_border_color,
+                             customBorderColors)
+      XE_UI_VULKAN_FEATURE_2(features_EXT_custom_border_color,
+                             customBorderColorWithoutFormat)
+    }
+  }
+
   // Vulkan 1.1 core subgroup properties.
   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
     XE_UI_VULKAN_PROPERTY_2(properties_subgroup, subgroupSize);
@@ -963,6 +997,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   }
   device->extensions_.ext_1_3_EXT_subgroup_size_control =
       ext_1_3_EXT_subgroup_size_control;
+
+  // VK_EXT_external_memory_host (#179).
+  if (device->extensions_.ext_EXT_external_memory_host) {
+    XE_UI_VULKAN_PROPERTY_2(properties_EXT_external_memory_host,
+                            minImportedHostPointerAlignment);
+  }
 
   // VK_KHR_fragment_shader_barycentric (#322) /
   // VK_NV_fragment_shader_barycentric (#203).
@@ -1149,6 +1189,16 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     }
   }
 
+  // Optional host-pointer import function - failing to load disables zero-copy.
+  if (device->extensions_.ext_EXT_external_memory_host) {
+    device->vkGetMemoryHostPointerPropertiesEXT_ =
+        PFN_vkGetMemoryHostPointerPropertiesEXT(ifn.vkGetDeviceProcAddr(
+            device->device_, "vkGetMemoryHostPointerPropertiesEXT"));
+    if (!device->vkGetMemoryHostPointerPropertiesEXT_) {
+      device->extensions_.ext_EXT_external_memory_host = false;
+    }
+  }
+
   if (!functions_loaded) {
     XELOGE("Failed to get all Vulkan device function pointers for '{}'",
            properties.deviceName);
@@ -1192,6 +1242,25 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     if (memory_type_flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) {
       device->memory_types_.host_cached |= memory_type_bit;
     }
+    XELOGI(
+        "Vulkan memory type {}: {}{}{}{}{}heap {}", memory_type_index,
+        (memory_type_flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+            ? "DEVICE_LOCAL "
+            : "",
+        (memory_type_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+            ? "HOST_VISIBLE "
+            : "",
+        (memory_type_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            ? "HOST_COHERENT "
+            : "",
+        (memory_type_flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+            ? "HOST_CACHED "
+            : "",
+        (memory_type_flags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+            ? "LAZILY_ALLOCATED "
+            : "",
+        memory_properties.memoryTypes[memory_type_index].heapIndex);
+
     // Detect ReBAR/SAM memory (both device-local and host-visible)
     if ((memory_type_flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
         (memory_type_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {

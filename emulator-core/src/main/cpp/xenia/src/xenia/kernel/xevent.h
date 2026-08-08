@@ -31,7 +31,7 @@ class XEvent : public XObject {
   ~XEvent() override;
 
   void Initialize(bool manual_reset, bool initial_state);
-  void InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header);
+  void InitializeNative(void* native_ptr, const X_DISPATCH_HEADER* header);
 
   int32_t Set(uint32_t priority_increment, bool wait);
   // Diagnostics: who last signaled this event (guest thread handle + lr,
@@ -55,9 +55,17 @@ class XEvent : public XObject {
   static object_ref<XEvent> Restore(KernelState* kernel_state,
                                     ByteStream* stream);
 
+  uint32_t cooperative_pulse_epoch() const override {
+    return pulse_epoch_.load();
+  }
+
  protected:
   xe::threading::WaitHandle* GetWaitHandle() override { return event_.get(); }
   void WaitCallback() override;
+
+  void CooperativeWaitBegin(XThread* thread) override;
+  void CooperativeWaitEnd(XThread* thread) override;
+  bool CooperativeMayAcquire(XThread* thread) override;
 
  private:
   void RecordCreator();
@@ -69,6 +77,9 @@ class XEvent : public XObject {
   uint32_t creator_thread_ = 0;
   uint32_t creator_lr_ = 0;
   std::unique_ptr<xe::threading::Event> event_;
+  // Parked cooperative waiters, so Pulse knows one will consume a set.
+  CooperativeWaiterFifo waiters_;
+  std::atomic<uint32_t> pulse_epoch_{0};
 };
 
 }  // namespace kernel

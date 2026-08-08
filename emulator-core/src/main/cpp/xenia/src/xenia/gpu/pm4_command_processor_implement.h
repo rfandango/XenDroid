@@ -769,6 +769,12 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_INTERRUPT(
                                          cpu_mask);
   }
 
+  // The handler runs as if everything before this point in the command stream
+  // is done, so export output it may read has to be in guest RAM first.
+  if (cvars::memexport_await_fences) {
+    COMMAND_PROCESSOR::AwaitMemexportForFence();
+  }
+
   for (int n = 0; n < 6; n++) {
     if (cpu_mask & (1 << n)) {
       graphics_system_->DispatchInterruptCallback(1, n);
@@ -804,6 +810,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_XE_SWAP(uint32_t packet,
 
   COMMAND_PROCESSOR::IssueSwap(frontbuffer_ptr, frontbuffer_width,
                                frontbuffer_height);
+
+  // Advance the present-frame counter shown in the log prefix.
+  logging::IncrementFrameNumber();
 
   // Apply host frame rate limiting (separate from guest vblank timing)
   COMMAND_PROCESSOR::ThrottlePresentation();
@@ -881,6 +890,15 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
                              static_cast<xenos::Endian>(poll_reg_addr & 0x3));
     } else {
       if (poll_reg_addr == XE_GPU_REG_COHER_STATUS_HOST) {
+        // A pending request (non-zero status, cleared by MakeCoherent) is the
+        // guest asking for a range to be made visible to it, so any export
+        // output landing there has to have reached guest RAM first.
+        if (cvars::memexport_await_fences &&
+            register_file_->values[XE_GPU_REG_COHER_STATUS_HOST]) {
+          COMMAND_PROCESSOR::AwaitMemexportForCoherency(
+              register_file_->values[XE_GPU_REG_COHER_BASE_HOST],
+              register_file_->values[XE_GPU_REG_COHER_SIZE_HOST]);
+        }
         MakeCoherent();
         value = value_ref;
       }
@@ -1119,6 +1137,13 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_SHD(
 
   // Writeback initiator.
   COMMAND_PROCESSOR::WriteEventInitiator(event_type);
+
+  // The guest treats this fence as "the GPU is done", so any export output it
+  // is about to read has to be in guest RAM first.
+  if (cvars::memexport_await_fences) {
+    COMMAND_PROCESSOR::AwaitMemexportForFence();
+  }
+
   uint32_t data_value;
   if ((initiator >> 31) & 0x1) {
     // Write counter (GPU vblank counter?).
@@ -1631,6 +1656,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_IM_LOAD(uint32_t packet,
   switch (shader_type) {
     case xenos::ShaderType::kVertex:
       active_vertex_shader_ = shader;
+      active_vertex_shader_ucode_address_ = addr;
       break;
     case xenos::ShaderType::kPixel:
       active_pixel_shader_ = shader;
@@ -1668,6 +1694,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_IM_LOAD_IMMEDIATE(
   switch (shader_type) {
     case xenos::ShaderType::kVertex:
       active_vertex_shader_ = shader;
+      // Embedded in the command buffer, no tracked address - the interpreter
+      // placeholder falls back to synchronous translation for these.
+      active_vertex_shader_ucode_address_ = 0;
       break;
     case xenos::ShaderType::kPixel:
       active_pixel_shader_ = shader;

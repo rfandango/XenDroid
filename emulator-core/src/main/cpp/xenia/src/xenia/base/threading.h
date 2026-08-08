@@ -51,6 +51,19 @@ class Fence {
     cond_.notify_all();
   }
 
+  // Consumes a pending signal and returns true, or returns false. For a single
+  // waiter, since it does not track the waiter count Wait() coordinates on.
+  bool TryWait() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (!(signal_state_ & SIGMASK_)) {
+      return false;
+    }
+    // Only the signal. The low bits count threads inside Wait(), and clearing
+    // those would strand one and trip Wait()'s count assert on the next Signal.
+    signal_state_ &= ~SIGMASK_;
+    return true;
+  }
+
   // Wait for the Fence to be signaled. Clears the signal on return.
   void Wait() {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -542,6 +555,10 @@ class Fiber {
   // Returns the fiber currently executing on this host thread, or nullptr if
   // the thread has not been adopted via CreateFromThread()/a switch.
   static Fiber* GetCurrentFiber();
+
+  // True when |address| lies in a live fiber stack's floor page, meaning the
+  // fault is a stack overflow. For crash handlers to label the failure.
+  static bool IsStackOverflowFault(const void* address);
 
   virtual ~Fiber() = default;
 

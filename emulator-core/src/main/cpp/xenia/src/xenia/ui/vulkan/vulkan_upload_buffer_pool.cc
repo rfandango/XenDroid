@@ -41,6 +41,14 @@ uint8_t* VulkanUploadBufferPool::Request(uint64_t submission_index, size_t size,
   if (!page) {
     return nullptr;
   }
+  if (VkDeviceSize(offset) + VkDeviceSize(size) > page->mapping_size_) {
+    XELOGE(
+        "Vulkan upload pool handed out {}+{} bytes in a page mapping {} bytes "
+        "at {}",
+        uint64_t(offset), uint64_t(size), uint64_t(page->mapping_size_),
+        page->mapping_);
+    return nullptr;
+  }
   buffer_out = page->buffer_;
   offset_out = VkDeviceSize(offset);
   return reinterpret_cast<uint8_t*>(page->mapping_) + offset;
@@ -56,6 +64,15 @@ uint8_t* VulkanUploadBufferPool::RequestPartial(uint64_t submission_index,
       static_cast<const VulkanPage*>(GraphicsUploadBufferPool::RequestPartial(
           submission_index, size, alignment, offset, size_obtained));
   if (!page) {
+    return nullptr;
+  }
+  if (VkDeviceSize(offset) + VkDeviceSize(size_obtained) >
+      page->mapping_size_) {
+    XELOGE(
+        "Vulkan upload pool handed out {}+{} bytes in a page mapping {} bytes "
+        "at {}",
+        uint64_t(offset), uint64_t(size_obtained),
+        uint64_t(page->mapping_size_), page->mapping_);
     return nullptr;
   }
   buffer_out = page->buffer_;
@@ -186,7 +203,14 @@ VulkanUploadBufferPool::CreatePageImplementation() {
     return nullptr;
   }
 
-  return new VulkanPage(vulkan_device_, buffer, memory, mapping);
+  util::ResetSanitizerTags(mapping, allocation_size_);
+
+  XELOGI("Vulkan upload pool {} (usage {:X}): page mapped at {}, {} bytes",
+         static_cast<const void*>(this), uint32_t(usage_), mapping,
+         uint64_t(allocation_size_));
+
+  return new VulkanPage(vulkan_device_, buffer, memory, mapping,
+                        allocation_size_);
 }
 
 void VulkanUploadBufferPool::FlushPageWrites(Page* page, size_t offset,
@@ -197,6 +221,7 @@ void VulkanUploadBufferPool::FlushPageWrites(Page* page, size_t offset,
 }
 
 VulkanUploadBufferPool::VulkanPage::~VulkanPage() {
+  XELOGI("Vulkan upload pool: destroying page mapped at {}", mapping_);
   const VulkanDevice::Functions& dfn = vulkan_device_->functions();
   const VkDevice device = vulkan_device_->device();
   dfn.vkDestroyBuffer(device, buffer_, nullptr);

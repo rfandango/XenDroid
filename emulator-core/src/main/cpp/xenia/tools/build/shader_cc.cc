@@ -146,6 +146,62 @@ bool WriteDepfile(const std::filesystem::path& depfile_path,
   return bool(out);
 }
 
+// slangc's -depfile names its own temp output as the target. Ninja treats a
+// target that isn't the edge's output as perpetually dirty, so rewrite it.
+bool RetargetDepfile(const std::filesystem::path& depfile_path,
+                     const std::filesystem::path& target) {
+  std::string content;
+  if (!ReadFile(depfile_path, &content)) {
+    return false;
+  }
+  // Everything past the separating colon is the dependency list.
+  size_t colon = std::string::npos;
+  for (size_t i = 0; i < content.size(); ++i) {
+    if (content[i] == '\\') {
+      ++i;
+    } else if (content[i] == ':' &&
+               !(i == 1 &&
+                 std::isalpha(static_cast<unsigned char>(content[0])))) {
+      colon = i;
+      break;
+    }
+  }
+  if (colon == std::string::npos) {
+    std::fprintf(stderr, "malformed depfile %s\n",
+                 depfile_path.string().c_str());
+    return false;
+  }
+  // Split on unescaped whitespace. WriteDepfile re-escapes on the way out.
+  std::vector<std::string> deps;
+  std::string dep;
+  for (size_t i = colon + 1; i < content.size(); ++i) {
+    char c = content[i];
+    if (c == '\\' && i + 1 < content.size()) {
+      char next = content[i + 1];
+      if (next == '\n' || next == '\r') {
+        continue;
+      }
+      if (next == ' ' || next == '\t') {
+        dep.push_back(' ');
+        ++i;
+        continue;
+      }
+      dep.push_back(c);  // literal separator in a Windows path
+    } else if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      if (!dep.empty()) {
+        deps.push_back(dep);
+        dep.clear();
+      }
+    } else {
+      dep.push_back(c);
+    }
+  }
+  if (!dep.empty()) {
+    deps.push_back(dep);
+  }
+  return WriteDepfile(depfile_path, target, deps);
+}
+
 std::string DisassembleSpirv(const std::vector<uint32_t>& spirv) {
   spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_2);
   std::string text;
@@ -598,6 +654,10 @@ int main(int argc, char** argv) {
     if (RunCommand(cmd) != 0) {
       std::fprintf(stderr, "slangc failed for %s\n",
                    input_path.string().c_str());
+      cleanup_slang();
+      return 1;
+    }
+    if (!depfile_path.empty() && !RetargetDepfile(depfile_path, output_path)) {
       cleanup_slang();
       return 1;
     }

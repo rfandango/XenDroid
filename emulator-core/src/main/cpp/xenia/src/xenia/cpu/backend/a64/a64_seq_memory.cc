@@ -89,13 +89,17 @@ static bool IsPossibleMMIOInstruction(A64Emitter& e, const hir::Instr* i) {
 struct DELAY_EXECUTION
     : Sequence<DELAY_EXECUTION, I<OPCODE_DELAY_EXECUTION, VoidOp>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // Coalesce consecutive yields (pure SMT hints) to shrink hot guest spin loops.
+    // db16cyc throttles a guest spin loop. yield is the literal translation
+    // but NOPs on Cortex-X/A7xx, so the sled cost nothing; isb is the usual
+    // stand-in - a pipeline flush with no guest-observable effect. Coalesce
+    // consecutive barriers so a long sled stays one instruction.
+    constexpr uint32_t kIsbSy = 0xD5033FDFu;
     if (e.getSize() >= sizeof(uint32_t) &&
         *reinterpret_cast<const uint32_t*>(e.getCurr() - sizeof(uint32_t)) ==
-            0xD503203Fu) {
+            kIsbSy) {
       return;
     }
-    e.yield();
+    e.isb(Xbyak_aarch64::SY);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_DELAY_EXECUTION, DELAY_EXECUTION);
@@ -192,6 +196,22 @@ static void SpinBackoffParkThunk(void* /*ppc_context*/) {
   thread_local uint32_t consec = 0;
   thread_local int64_t last_ns = 0;
   thread_local int64_t ep_start_ns = 0;
+  if (cvars::guest_scheduler) {
+    // Cooperative path: host-parking would stall co-resident fibers (the NFS
+    // Most Wanted deadlock class) and host-spinning never runs the producer,
+    // which may be a fiber queued behind this one. Yield instead - ready-tail
+    // requeue guarantees co-resident progress.
+    if (auto* yield_handler = xe::cpu::backend::spin_backoff_yield_handler) {
+      yield_handler(nullptr);
+      return;
+    }
+    // Scheduler enabled but not started yet (early init), or a non-fiber
+    // caller: fall back to the cheap spin.
+    for (uint32_t n = 0; n < 8; ++n) {
+      __asm__ __volatile__("isb sy" ::: "memory");
+    }
+    return;
+  }
   const int64_t now_ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
@@ -205,7 +225,7 @@ static void SpinBackoffParkThunk(void* /*ppc_context*/) {
     ep_start_ns = now_ns;
   }
   last_ns = now_ns;
-  if (cvars::guest_scheduler || ++consec < kSpinIters) {
+  if (++consec < kSpinIters) {
     for (uint32_t n = 0; n < 8; ++n) {
       __asm__ __volatile__("isb sy" ::: "memory");
     }
@@ -237,10 +257,27 @@ struct SPIN_BACKOFF
       // Adaptive spin-then-park (see SpinBackoffParkThunk): cheap for short
       // waits, a real short sleep for long ones. CallNativeSafe preserves guest
       // context across the (possibly sleeping) helper.
+      //
+      // The helper only yields the fiber, a no-op unless something else is
+      // runnable, but the call is a full guest->host thunk (28 Q-regs, 464 B
+      // frame) plus a thread_local lookup. Gate it on the scheduler's own
+      // give-way flag so the common case is two instructions.
+      if (cvars::guest_scheduler) {
+        static_assert(offsetof(ppc::PPCContext, preempt_requested) < 4096);
+        auto& skip = e.NewCachedLabel();
+        e.ldrb(e.w16, Xbyak_aarch64::ptr(
+                          e.GetContextReg(),
+                          static_cast<uint32_t>(offsetof(
+                              ppc::PPCContext, preempt_requested))));
+        e.cbz(e.w16, skip);
+        e.CallNativeSafe(reinterpret_cast<void*>(&SpinBackoffParkThunk));
+        e.L(skip);
+        return;
+      }
       e.CallNativeSafe(reinterpret_cast<void*>(&SpinBackoffParkThunk));
       return;
     }
-    Xbyak_aarch64::Label loop;
+    auto& loop = e.NewCachedLabel();
     e.mov(e.w16, count);
     e.L(loop);
     e.isb(Xbyak_aarch64::SY);
@@ -260,6 +297,16 @@ struct MEMORY_BARRIER
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_MEMORY_BARRIER, MEMORY_BARRIER);
+
+// ============================================================================
+// OPCODE_LOAD_BARRIER
+// ============================================================================
+struct LOAD_BARRIER : Sequence<LOAD_BARRIER, I<OPCODE_LOAD_BARRIER, VoidOp>> {
+  static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.dmb(Xbyak_aarch64::ISHLD);
+  }
+};
+EMITTER_OPCODE_TABLE(OPCODE_LOAD_BARRIER, LOAD_BARRIER);
 
 // ============================================================================
 // OPCODE_CACHE_CONTROL
@@ -1346,9 +1393,9 @@ static const Xbyak_aarch64::XReg& LoadBackendCtxPtr(A64Emitter& e) {
 }
 
 // Two paths, selected by a64_native_reserved_ops:
-//  - Software (cvar off): RESERVED_LOAD/STORE call host helpers that keep a
-//    global per-block bitmap, so a stwcx. on one thread invalidates concurrent
-//    lwarx reservations on others.
+//  - Software (cvar off): RESERVED_LOAD/STORE call host helpers that share a
+//    per-granule generation counter, so a stwcx. on one thread invalidates
+//    concurrent lwarx reservations on others.
 //  - Native (cvar on, default): inline, no thunk. lwarx plain-loads the word,
 //    stashes it in cached_reserve_value_, and arms a per-thread reserve flag;
 //    stwcx. validates with one LSE CASAL. An EARLIER native design armed the
@@ -1359,6 +1406,10 @@ static const Xbyak_aarch64::XReg& LoadBackendCtxPtr(A64Emitter& e) {
 //    succeeds and the guest retry loop livelocks (hung Forza Horizon). The CAS
 //    is a single atomic with no such window. The guest byte-swap is a separate
 //    HIR op on both paths, so the captured/compared value is the raw word.
+//    Upstream's caveat applies to the native path: comparing the cached
+//    value cannot see an ABA where another thread writes and restores the
+//    word between the guest's lwarx and stwcx.; the software path's
+//    generation counter does catch that.
 struct RESERVED_LOAD_I32
     : Sequence<RESERVED_LOAD_I32, I<OPCODE_RESERVED_LOAD, I32Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {

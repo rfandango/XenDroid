@@ -10,6 +10,7 @@
 #ifndef XENIA_CPU_BACKEND_A64_A64_BACKEND_H_
 #define XENIA_CPU_BACKEND_A64_A64_BACKEND_H_
 
+#include <atomic>
 #include <memory>
 
 #include "xenia/base/bit_map.h"
@@ -38,17 +39,21 @@ static constexpr uint32_t GUEST_TRAMPOLINE_MIN_LEN = 8;
 static constexpr uint32_t MAX_GUEST_TRAMPOLINES =
     (GUEST_TRAMPOLINE_END - GUEST_TRAMPOLINE_BASE) / GUEST_TRAMPOLINE_MIN_LEN;
 
-// 128-byte granule (>= the largest expected hardware ERG) so the software
-// fallback bitmap mirrors native LL/SC granularity instead of falsely
-// serializing every reservation in a shared 64KB page.
-#define A64_RESERVE_BLOCK_SHIFT 7
-#define A64_RESERVE_NUM_ENTRIES \
-  ((1024ULL * 1024ULL * 1024ULL * 4ULL) >> A64_RESERVE_BLOCK_SHIFT)
+// Xenon reservation granule is one 128 byte cache line.
+static constexpr uint32_t A64_RESERVE_GRANULE_SHIFT = 7;
+// A generation counter per granule, hashed. stwcx. bumps its granule to kill
+// other threads' reservations. Colliding granules only cost a spurious failure.
+static constexpr uint32_t A64_RESERVE_NUM_ENTRIES = 1u << 20;
+static constexpr uint32_t A64_RESERVE_ENTRY_MASK = A64_RESERVE_NUM_ENTRIES - 1;
 
 struct ReserveHelper {
-  uint64_t blocks[A64_RESERVE_NUM_ENTRIES / 64];
+  std::atomic<uint32_t> generations[A64_RESERVE_NUM_ENTRIES];
 
-  ReserveHelper() { memset(blocks, 0, sizeof(blocks)); }
+  ReserveHelper() {
+    for (auto& generation : generations) {
+      generation.store(0, std::memory_order_relaxed);
+    }
+  }
 };
 
 struct A64BackendStackpoint {
@@ -81,8 +86,9 @@ struct A64BackendContext {
   uint64_t cached_reserve_value_;
   uint64_t* guest_tick_count;
   A64BackendStackpoint* stackpoints;
-  uint64_t cached_reserve_offset;
-  uint32_t cached_reserve_bit;
+  // address of the live reservation, and its granule generation when taken
+  uint32_t reserve_address;
+  uint32_t reserve_generation;
   unsigned int current_stackpoint_depth;
   unsigned int pending_stackpoint_sync_depth;
   unsigned int fpcr_fpu;
@@ -148,6 +154,13 @@ class A64Backend : public Backend {
   void FreeGuestTrampoline(uint32_t trampoline_addr) override;
   void SetGuestRoundingMode(void* ctx, unsigned int mode) override;
   bool PopulatePseudoStacktrace(GuestPseudoStackTrace* st) override;
+
+  uint32_t ReservedLoad32(ppc::PPCContext* context, uint32_t address) override;
+  uint64_t ReservedLoad64(ppc::PPCContext* context, uint32_t address) override;
+  bool ReservedStore32(ppc::PPCContext* context, uint32_t address,
+                       uint32_t value) override;
+  bool ReservedStore64(ppc::PPCContext* context, uint32_t address,
+                       uint64_t value) override;
 
   bool trace_instr_available() const override;
   bool trace_data_available() const override;

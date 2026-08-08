@@ -9,6 +9,7 @@
 
 #include "xenia/base/logging.h"
 #include "xenia/emulator.h"
+#include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_flags.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -190,7 +191,7 @@ dword_result_t XamNuiCameraSetFlags_entry(qword_t unk1, dword_t unk2) {
 DECLARE_XAM_EXPORT1(XamNuiCameraSetFlags, kNone, kStub);
 
 dword_result_t XamIsNuiUIActive_entry() {
-  return kernel_state()->xam_state()->xam_nui_dialogs_shown_ > 0;
+  return kernel_state()->xam_state()->is_xam_dialog_present_.load();
 }
 DECLARE_XAM_EXPORT1(XamIsNuiUIActive, kNone, kImplemented);
 
@@ -377,9 +378,9 @@ dword_result_t XamShowNuiTroubleshooterUI_entry(dword_t user_index,
               "The game has indicated there is a problem with NUI (Kinect).")
               ->Then(&fence);
         })) {
-      kernel_state()->xam_state()->xam_dialogs_shown_++;
-      fence.Wait();
-      kernel_state()->xam_state()->xam_dialogs_shown_--;
+      kernel_state()->xam_state()->is_xam_dialog_present_.store(true);
+      GuestScheduler::WaitOnFence(fence);
+      kernel_state()->xam_state()->is_xam_dialog_present_.store(false);
     }
   }
 

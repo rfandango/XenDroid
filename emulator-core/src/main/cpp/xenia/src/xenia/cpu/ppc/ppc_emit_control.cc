@@ -23,6 +23,24 @@ DEFINE_bool(ignore_trap_instructions, true,
             "better performance in games that aggressively check with trap.",
             "CPU");
 
+DEFINE_uint32(
+    inline_gprlr_saverest_parts, 3,
+    "Bisect aid for inline_gprlr_saverest: bit 0 inlines the save helpers, "
+    "bit 1 the restore helpers. 3 = both. Only consulted while "
+    "inline_gprlr_saverest itself is on.",
+    "CPU");
+
+DEFINE_bool(
+    inline_gprlr_saverest, true,
+    "Expand calls to the XDK __savegprlr_N/__restgprlr_N helpers inline "
+    "instead of emitting real guest calls. The helpers are a handful of "
+    "stack stores or loads, but as calls each one pays LR bookkeeping, the "
+    "call indirection, a full guest prologue with a stackpoint push, and the "
+    "return protocol - measured at a fifth of a pegged dispatch thread in "
+    "call-heavy guest loops. The module loader already identifies the "
+    "helpers; this consumes that mark at translation time.",
+    "CPU");
+
 namespace xe {
 namespace cpu {
 namespace ppc {
@@ -33,10 +51,82 @@ using namespace xe::cpu::hir;
 using xe::cpu::hir::Label;
 using xe::cpu::hir::Value;
 
+// Inline expansion of the XDK GPR save/rest helpers. __savegprlr_N stores
+// r_N..r31 at r1-0x98+8*(N-14) upward and the r12-staged return address at
+// r1-8; __restgprlr_N reloads them, restores LR and returns. Byte order and
+// widths mirror InstrEmit_std/lwz.
+static bool TryInlineGprlrSaverest(PPCHIRBuilder& f, uint64_t cia,
+                                   uint32_t nia_value, bool lk) {
+  if (!cvars::inline_gprlr_saverest) {
+    return false;
+  }
+  Function* function = f.LookupFunction(nia_value);
+  if (!function || !function->IsSaverest() ||
+      function->SaverestType() != SaveRestoreType::GPR ||
+      function->address() != nia_value) {
+    return false;
+  }
+  int n = int(function->SaverestIndex());
+  if (n < 14 || n > 31) {
+    return false;
+  }
+  Value* r1 = f.LoadGPR(1);
+  if (function->IsSave() && lk && (cvars::inline_gprlr_saverest_parts & 1)) {
+    // bl __savegprlr_N: LR <- cia+4 architecturally, though the real return
+    // path goes through the r12 slot the restore reloads.
+    for (int r = n; r <= 31; ++r) {
+      Value* offset = f.LoadConstantInt64(-0x98 + 8 * (r - 14));
+      f.StoreOffset(r1, offset, f.ByteSwap(f.LoadGPR(r)));
+    }
+    f.StoreOffset(r1, f.LoadConstantInt64(-8),
+                  f.ByteSwap(f.Truncate(f.LoadGPR(12), INT32_TYPE)));
+    f.StoreLR(f.LoadConstantUint64(cia + 4));
+    return true;
+  }
+  if (function->IsRestore() && !lk &&
+      (cvars::inline_gprlr_saverest_parts & 2)) {
+    // b __restgprlr_N: reload the frame, then return through the restored LR
+    // exactly as a translated blr would.
+    for (int r = n; r <= 31; ++r) {
+      Value* offset = f.LoadConstantInt64(-0x98 + 8 * (r - 14));
+      f.StoreGPR(r, f.ByteSwap(f.LoadOffset(r1, offset, INT64_TYPE)));
+    }
+    Value* ret = f.ZeroExtend(
+        f.ByteSwap(f.LoadOffset(r1, f.LoadConstantInt64(-8), INT32_TYPE)),
+        INT64_TYPE);
+    f.StoreGPR(12, ret);
+    f.StoreLR(ret);
+    // POSSIBLE_RETURN is load-bearing, not an optimization: without it every
+    // return address goes through the indirection table, and each miss mints a
+    // new overlapping translation at that mid-function address - enough to
+    // overflow the code cache within seconds of boot.
+    f.CallIndirect(ret, CALL_TAIL | CALL_POSSIBLE_RETURN);
+    return true;
+  }
+  return false;
+}
+
 int InstrEmit_branch(PPCHIRBuilder& f, const char* src, uint64_t cia,
                      Value* nia, bool lk, Value* cond = NULL,
                      bool expect_true = true, bool nia_is_lr = false) {
   uint32_t call_flags = 0;
+
+  // Saverest helpers first: their calls are pure register spill/fill and the
+  // whole call apparatus around them is overhead. Conditional forms fall
+  // through to the normal path.
+  if (nia->IsConstant() && !cond) {
+    uint32_t target = uint32_t(nia->AsUint64() & 0xFFFFFFFF);
+    if (target != f.function()->address() &&
+        TryInlineGprlrSaverest(f, cia, target, lk)) {
+      return 0;
+    }
+    // Then small leaves generally. Only a linking call: a tail branch to a
+    // leaf is already as cheap as it gets, and the inlined body has no return
+    // of its own to fall out of.
+    if (lk && f.TryInlineLeafCall(target, cia)) {
+      return 0;
+    }
+  }
 
   // TODO(benvanik): this may be wrong and overwrite LRs when not desired!
   // The docs say always, though...

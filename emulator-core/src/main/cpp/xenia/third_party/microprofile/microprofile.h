@@ -1001,7 +1001,6 @@ inline uint16_t MicroProfileGetGroupIndex(MicroProfileToken t)
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#define snprintf _snprintf
 
 #pragma warning(push)
 #pragma warning(disable: 4244)

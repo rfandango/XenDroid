@@ -113,10 +113,6 @@ msgstr "نظارہ(&V)"
 msgid "&Volume"
 msgstr "والیوم(&V)"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(انسٹال شدہ) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(نامعلوم ٹائٹل)"
@@ -963,6 +959,14 @@ msgstr "کوئی پروفائل نہیں ملا"
 msgid "No file path is set for this title."
 msgstr "اس ٹائٹل کے لیے کوئی فائل کا راستہ مقرر نہیں ہے۔"
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "کوئی گیم نہیں ملی۔"
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "کوئی نئی گیم نہیں ملی۔"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1314,10 +1318,6 @@ msgstr "حالت"
 msgid "Status: %s"
 msgstr "حالت: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "حالت: انسٹال شدہ"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "چلتے ہوئے ٹائٹل کو روکیں اور فہرست پر واپس جائیں"
@@ -1580,3 +1580,4 @@ msgstr "Direct3D 12 ڈیبگ لیئر انسٹال ہو گیا، لیکن خود
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll نہیں ملی، جو Vulkan گرافکس بیک اینڈ کے لیے درکار ہے۔ ابھی ڈاؤن لوڈ کریں (~20 MB)؟"
+

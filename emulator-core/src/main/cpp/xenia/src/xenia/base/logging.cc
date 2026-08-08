@@ -10,6 +10,7 @@
 #include "xenia/base/logging.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -83,9 +84,14 @@ class Logger;
 
 Logger* logger_ = nullptr;
 
+// Present-frame counter, advanced once per guest present. Stamped into each
+// log line at emit time.
+std::atomic<uint32_t> global_frame_number_{0};
+
 struct LogLine {
   size_t buffer_length;
   uint32_t thread_id;
+  uint32_t frame_number;
   uint16_t _pad_0;  // (2b) padding
   bool terminate;
   char prefix_char;
@@ -330,24 +336,12 @@ class Logger {
           i += needed_count;
 
           if (line.prefix_char) {
-            char prefix[] = {
-                line.prefix_char,
-                '>',
-                ' ',
-                '?',  // Thread ID gets placed here (8 chars).
-                '?',
-                '?',
-                '?',
-                '?',
-                '?',
-                '?',
-                '?',
-                ' ',
-                0,
-            };
-            fmt::format_to_n(prefix + 3, sizeof(prefix) - 3, "{:08X}",
-                             line.thread_id);
-            Write(prefix, sizeof(prefix) - 1);
+            // <type>> f:<frame> <thread id>
+            char prefix[32];
+            auto result = fmt::format_to_n(
+                prefix, sizeof(prefix), "{}> f:{:07} {:08X} ", line.prefix_char,
+                line.frame_number, line.thread_id);
+            Write(prefix, result.size);
           }
 
           if (line.buffer_length) {
@@ -430,6 +424,7 @@ class Logger {
     LogLine line = {};
     line.buffer_length = buffer_length;
     line.thread_id = thread_id;
+    line.frame_number = global_frame_number_.load(std::memory_order_relaxed);
     line.prefix_char = prefix_char;
     line.terminate = terminate;
 
@@ -506,6 +501,14 @@ void logging::ToggleLogLevel() {
 bool logging::ShouldLog(LogLevel log_level, uint32_t log_mask) {
   return static_cast<int32_t>(log_level) <= cvars::log_level &&
          (log_mask & cvars::log_mask) == 0;
+}
+
+uint32_t logging::GetFrameNumber() {
+  return global_frame_number_.load(std::memory_order_relaxed);
+}
+
+void logging::IncrementFrameNumber() {
+  global_frame_number_.fetch_add(1, std::memory_order_relaxed);
 }
 
 uint32_t logging::internal::GetLogLevel() { return cvars::log_level; }

@@ -11,6 +11,9 @@
 
 #include <cstring>
 
+#include "xenia/base/byte_order.h"
+#include "xenia/cpu/ppc/ppc_context.h"
+
 namespace xe {
 namespace cpu {
 namespace backend {
@@ -26,6 +29,30 @@ bool Backend::Initialize(Processor* processor) {
 void* Backend::AllocThreadData() { return nullptr; }
 
 void Backend::FreeThreadData(void* thread_data) {}
+
+void (*preempt_yield_handler)(void* raw_context) = nullptr;
+
+void (*spin_backoff_yield_handler)(void* raw_context) = nullptr;
+
+uint32_t Backend::ReservedLoad32(ppc::PPCContext* context, uint32_t address) {
+  return xe::byte_swap(*context->TranslateVirtual<uint32_t*>(address));
+}
+
+uint64_t Backend::ReservedLoad64(ppc::PPCContext* context, uint32_t address) {
+  return xe::byte_swap(*context->TranslateVirtual<uint64_t*>(address));
+}
+
+bool Backend::ReservedStore32(ppc::PPCContext* context, uint32_t address,
+                              uint32_t value) {
+  *context->TranslateVirtual<uint32_t*>(address) = xe::byte_swap(value);
+  return true;
+}
+
+bool Backend::ReservedStore64(ppc::PPCContext* context, uint32_t address,
+                              uint64_t value) {
+  *context->TranslateVirtual<uint64_t*>(address) = xe::byte_swap(value);
+  return true;
+}
 
 }  // namespace backend
 }  // namespace cpu

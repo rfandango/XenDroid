@@ -12,7 +12,6 @@
 
 #include <atomic>
 #include <mutex>
-#include <queue>
 
 #include "xenia/base/mutex.h"
 #include "xenia/base/threading.h"
@@ -35,6 +34,8 @@ class AudioSystem {
   // XAUDIO2_MAX_QUEUED_BUFFERS))
   static constexpr size_t kMinimumQueuedFrames = 4;
   static constexpr size_t kMaximumQueuedFrames = 64;
+  static constexpr uint32_t kAudioPumpInterval = 5333u;
+  static constexpr uint32_t kAudioIntervalSlack = 400u;
 
   virtual ~AudioSystem();
 
@@ -100,6 +101,8 @@ class AudioSystem {
     uint32_t callback_arg = 0;
     uint32_t wrapped_callback_arg = 0;
     bool in_use = false;
+    // Wall-clock deadline for this client's next pump.
+    uint64_t next_pump_us = 0;
     std::atomic<uint32_t> frames_submitted{0};
     std::atomic<uint32_t> frames_processed{0};
     std::atomic<uint32_t> frames_dropped{0};
@@ -112,9 +115,8 @@ class AudioSystem {
 
   std::unique_ptr<xe::threading::Semaphore>
       client_semaphores_[kMaximumClientCount];
-  // Event is always there in case we have no clients.
-  std::unique_ptr<xe::threading::Event> shutdown_event_;
-  xe::threading::WaitHandle* wait_handles_[kMaximumClientCount + 1];
+  // Wakes the worker to re-scan clients on register, shutdown, and pause.
+  std::unique_ptr<xe::threading::Event> pending_work_event_;
 
   // The worker's exit from a pause depends on observing this.
   std::atomic<bool> paused_ = {false};

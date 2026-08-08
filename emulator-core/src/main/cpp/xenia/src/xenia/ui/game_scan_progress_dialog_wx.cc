@@ -234,11 +234,6 @@ void GameScanProgressDialog::AppendFinalRow(FinalRow& row) {
   col->Add(line1, 0, wxBOTTOM, 2);
 
   wxString details = FormatRowDetails(primary);
-  if (row.sources.size() == 1 && !row.source_installed.empty() &&
-      row.source_installed[0]) {
-    wxString status = _("Status: Installed");
-    details = details.IsEmpty() ? status : (status + "   " + details);
-  }
   if (!details.IsEmpty()) {
     auto* details_text = new wxStaticText(list_panel_, wxID_ANY, details);
     col->Add(details_text, 0, wxBOTTOM, 2);
@@ -250,37 +245,15 @@ void GameScanProgressDialog::AppendFinalRow(FinalRow& row) {
                          wxString::FromUTF8(xe::path_to_utf8(primary.path)));
     col->Add(path_text, 0, wxBOTTOM, 2);
   } else {
-    // Per-source: user-edited GPD label if installed, else DeriveDiscLabel.
-    const std::vector<InstalledDisc>* installed_discs = nullptr;
-    auto it = already_installed_.find(primary.title_id);
-    if (it != already_installed_.end()) {
-      installed_discs = &it->second;
-    }
-    for (size_t i = 0; i < row.sources.size(); ++i) {
-      const auto& src = row.sources[i];
-      const bool installed =
-          i < row.source_installed.size() && row.source_installed[i];
-      std::string label;
-      if (installed && installed_discs) {
-        for (const auto& d : *installed_discs) {
-          if (d.path == src.path && !d.label.empty()) {
-            label = d.label;
-            break;
-          }
-        }
-      }
-      if (label.empty()) {
-        label = DeriveDiscLabel(src);
-      }
-      const wxString prefix =
-          installed ? wxString(_("(Installed) ")) : wxString();
+    // One line per disc: derived label plus path.
+    for (const auto& src : row.sources) {
+      std::string label = DeriveDiscLabel(src);
       wxString line;
       if (!label.empty()) {
-        line = wxString::Format("%s%s  %s", prefix, wxString::FromUTF8(label),
+        line = wxString::Format("%s  %s", wxString::FromUTF8(label),
                                 wxString::FromUTF8(xe::path_to_utf8(src.path)));
       } else {
-        line = wxString::Format("%s%s", prefix,
-                                wxString::FromUTF8(xe::path_to_utf8(src.path)));
+        line = wxString::FromUTF8(xe::path_to_utf8(src.path));
       }
       auto* path_text = new wxStaticText(list_panel_, wxID_ANY, line);
       col->Add(path_text, 0, wxBOTTOM, 2);
@@ -376,6 +349,43 @@ void GameScanProgressDialog::StartFinalization() {
     }
   }
 
+  // Show only newly found items. Drop sources already in the library, and
+  // rows with nothing new. Counts above stay on the full scan.
+  std::vector<FinalRow> new_rows;
+  new_rows.reserve(rows.size());
+  for (auto& r : rows) {
+    FinalRow nr;
+    nr.sort_key = std::move(r.sort_key);
+    for (size_t i = 0; i < r.sources.size(); ++i) {
+      if (!r.source_installed[i]) {
+        nr.sources.push_back(std::move(r.sources[i]));
+      }
+    }
+    if (nr.sources.empty()) {
+      continue;
+    }
+    nr.source_installed.assign(nr.sources.size(), false);
+    new_rows.push_back(std::move(nr));
+  }
+  rows = std::move(new_rows);
+
+  if (rows.empty()) {
+    // Nothing new to show. Say why instead of leaving a blank list.
+    placeholder_label_ = new wxStaticText(
+        list_panel_, wxID_ANY,
+        all.empty() ? _("No games found.") : _("No new games found."));
+    wxFont placeholder_font = placeholder_label_->GetFont();
+    placeholder_font.Scale(1.2f);
+    placeholder_label_->SetFont(placeholder_font);
+    list_panel_->Freeze();
+    list_sizer_->AddStretchSpacer(1);
+    list_sizer_->Add(placeholder_label_, 0, wxALIGN_CENTER_HORIZONTAL);
+    list_sizer_->AddStretchSpacer(1);
+    list_panel_->FitInside();
+    list_panel_->Layout();
+    list_panel_->Thaw();
+  }
+
   // Snapshot survives the chunked render that drains pending_final_rows_.
   all_rows_ = rows;
   pending_final_rows_ = std::move(rows);
@@ -463,9 +473,6 @@ void GameScanProgressDialog::OnImport() {
     std::vector<PendingImport> group;
     const bool needs_label = r.sources.size() > 1;
     for (size_t i = 0; i < r.sources.size(); ++i) {
-      if (i < r.source_installed.size() && r.source_installed[i]) {
-        continue;
-      }
       PendingImport pi;
       pi.game = r.sources[i];
       if (needs_label) {

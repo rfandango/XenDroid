@@ -100,7 +100,12 @@ GraphicsUploadBufferPool::Page* GraphicsUploadBufferPool::Request(
   assert_true(!submitted_last_ ||
               submission_index >= submitted_last_->last_submission_index_);
   size_t current_page_used_aligned = xe::align(current_page_used_, alignment);
-  if (current_page_used_aligned + size > page_size_ || !writable_first_) {
+  // Against the current page's real capacity, not page_size_: a page created
+  // before page_size_ grew is smaller than page_size_ claims, and overshooting
+  // it writes past the end of its mapping into whatever follows.
+  const size_t current_capacity =
+      writable_first_ ? writable_first_->capacity_ : page_size_;
+  if (current_page_used_aligned + size > current_capacity || !writable_first_) {
     // Start a new page if can't fit all the bytes or don't have an open page.
     if (writable_first_) {
       // Close the page that was current.
@@ -126,13 +131,19 @@ GraphicsUploadBufferPool::Page* GraphicsUploadBufferPool::Request(
       }
       writable_first_->last_submission_index_ = submission_index;
       writable_first_->next_ = nullptr;
+      // Stamped after creation, so it records the size this page was really
+      // built with even if the implementation grew page_size_ while building
+      // it.
+      writable_first_->capacity_ = page_size_;
       writable_last_ = writable_first_;
-      // After CreatePageImplementation (more specifically, the first successful
-      // call), page_size_ may grow - but this doesn't matter here.
     }
     current_page_used_ = 0;
     current_page_used_aligned = 0;
     current_page_flushed_ = 0;
+  }
+  if (size > writable_first_->capacity_) {
+    // A recycled page predating a page_size_ growth cannot hold this request.
+    return nullptr;
   }
   writable_first_->last_submission_index_ = submission_index;
   offset_out = current_page_used_aligned;
@@ -146,11 +157,13 @@ GraphicsUploadBufferPool::Page* GraphicsUploadBufferPool::RequestPartial(
   alignment = std::max(alignment, size_t(1));
   assert_true(xe::is_pow2(alignment));
   size = xe::align(size, alignment);
-  size = std::min(size, page_size_);
+  const size_t current_capacity =
+      writable_first_ ? writable_first_->capacity_ : page_size_;
+  size = std::min(size, current_capacity);
   size_t current_page_used_aligned = xe::align(current_page_used_, alignment);
-  if (current_page_used_aligned + alignment <= page_size_) {
+  if (current_page_used_aligned + alignment <= current_capacity) {
     size = std::min(
-        size, (page_size_ - current_page_used_aligned) & ~(alignment - 1));
+        size, (current_capacity - current_page_used_aligned) & ~(alignment - 1));
   }
   Page* page = Request(submission_index, size, alignment, offset_out);
   if (!page) {

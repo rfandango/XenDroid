@@ -27,6 +27,16 @@ drivers.
   point at an existing install instead, set the `SLANGC_PATH` environment
   variable. See `.github/workflows/build.yml` for the version CI pins and how
   it caches the download.
+* The D3D12 backend builds Mesa's `spirv_to_dxil` (the SPIR-V to DXIL guest
+  shader compiler) from the `third_party/mesa` submodule using Meson. You need
+  Meson and the Python `mako` and `pyyaml` modules on PATH; Ninja is already
+  provided by the "C++ CMake tools for Windows" component. Install with:
+    ```
+    python -m pip install meson mako pyyaml
+    ```
+  Initialize the submodule along with the others (`git submodule update --init
+  third_party/mesa`). This is Windows-only, as the D3D12 backend is not built on
+  Linux or macOS.
 
 ```
 git clone https://github.com/has207/xenia-edge.git

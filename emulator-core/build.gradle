@@ -26,8 +26,29 @@ android {
                 abiFilters 'arm64-v8a'
                 // Optimize host code in all variants; -g kept for simpleperf;
                 // -fno-strict-aliasing for the raw-memory-reinterpretation code.
-                cFlags '-O2', '-DNDEBUG', '-g', '-fno-strict-aliasing'
-                cppFlags '-O2', '-DNDEBUG', '-g', '-fno-strict-aliasing'
+                // HWASan build: XENDROID_HWASAN=true. Tags every heap
+                // allocation and every load/store, so a bad write aborts at
+                // the instruction that made it instead of at whatever frees
+                // the clobbered chunk later. Needs -O1 and a frame pointer to
+                // keep the reports readable, and the runtime is pulled in by
+                // the linker flag below.
+                if (System.getenv('XENDROID_HWASAN') == 'true') {
+                    // -DNDEBUG as in the normal build: without it every
+                    // assert_always becomes live, and the emulator has
+                    // assertions that a shipping build deliberately runs past.
+                    // The point here is to change memory checking, not program
+                    // semantics.
+                    cFlags '-O1', '-DNDEBUG', '-g', '-fno-strict-aliasing',
+                           '-fsanitize=hwaddress', '-fno-omit-frame-pointer'
+                    cppFlags '-O1', '-DNDEBUG', '-g', '-fno-strict-aliasing',
+                             '-fsanitize=hwaddress', '-fno-omit-frame-pointer'
+                    arguments '-DANDROID_SANITIZE=hwaddress',
+                              '-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=hwaddress',
+                              '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=hwaddress'
+                } else {
+                    cFlags '-O2', '-DNDEBUG', '-g', '-fno-strict-aliasing'
+                    cppFlags '-O2', '-DNDEBUG', '-g', '-fno-strict-aliasing'
+                }
                 if (System.getenv('USE_CCACHE') == 'true') {
                     arguments '-DCMAKE_C_COMPILER_LAUNCHER=ccache',
                               '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache'

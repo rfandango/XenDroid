@@ -48,26 +48,25 @@ class ImGuiPerformanceDialog : public ImGuiGamepadDialog {
 
   // Setting change handlers
   void OnReadbackResolveChanged(int value);
-  void OnReadbackMemexportChanged(int value);
+  void OnReadbackResolveSyncChanged(bool enabled);
+  void OnMemexportAwaitFencesChanged(bool enabled);
   void OnOcclusionQueryChanged(int value);
   void OnEmulatedDisplayUncappedChanged(bool uncapped);
-  void OnClearMemoryPageStateChanged(bool enabled);
   void OnFramerateLimitChanged(int value);
 
   app::EmulatorWindow* emulator_window_;
   std::function<void()> on_close_callback_;
 
   // Current settings state (selected values)
-  int readback_resolve_mode_ = 2;    // 0=None, 1=Some, 2=Fast, 3=Full
-  int readback_memexport_mode_ = 1;  // 0=None, 1=Fast, 2=Full
-  int occlusion_query_mode_ = 0;     // 0=Fake, 1=Fast, 2=Strict
+  int readback_resolve_mode_ = 1;  // 0=None, 1=Fast, 2=All
+  bool readback_resolve_sync_ = true;
+  bool memexport_await_fences_ = true;
+  int occlusion_query_mode_ = 0;  // 0=Fake, 1=Fast, 2=Fast-Alt, 3=Strict
   bool display_uncapped_ = false;
-  bool clear_memory_page_state_ = false;
   int framerate_limit_ = 0;  // FPS, 0 = unlimited
 
   // Highlight positions for navigation
-  int resolve_highlight_ = 2;
-  int memexport_highlight_ = 1;
+  int resolve_highlight_ = 1;
   int occlusion_query_highlight_ = 0;
 };
 

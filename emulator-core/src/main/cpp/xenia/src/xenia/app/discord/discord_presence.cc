@@ -22,7 +22,12 @@ void HandleDiscordJoinGame(const char* joinSecret) {}
 void HandleDiscordJoinRequest(const DiscordUser* request) {}
 void HandleDiscordSpectateGame(const char* spectateSecret) {}
 
+bool DiscordPresence::initialized_ = false;
+
 void DiscordPresence::Initialize() {
+  if (initialized_) {
+    return;
+  }
   DiscordEventHandlers handlers = {};
   handlers.ready = &HandleDiscordReady;
   handlers.errored = &HandleDiscordError;
@@ -30,17 +35,7 @@ void DiscordPresence::Initialize() {
   handlers.joinRequest = &HandleDiscordJoinRequest;
   handlers.spectateGame = &HandleDiscordSpectateGame;
   Discord_Initialize("1425285186387578910", &handlers, 0, "");
-}
-
-void DiscordPresence::NotPlaying() {
-  DiscordRichPresence discordPresence = {};
-  discordPresence.state = "Idle";
-  discordPresence.details = "Standby";
-  discordPresence.largeImageKey = "app";
-  discordPresence.largeImageText = "Xenia Edge - Experimental Testing branch";
-  discordPresence.startTimestamp = time(0);
-  discordPresence.instance = 1;
-  Discord_UpdatePresence(&discordPresence);
+  initialized_ = true;
 }
 
 void DiscordPresence::PlayingTitle(const std::string_view game_title) {
@@ -58,7 +53,13 @@ void DiscordPresence::PlayingTitle(const std::string_view game_title) {
   Discord_UpdatePresence(&discordPresence);
 }
 
-void DiscordPresence::Shutdown() { Discord_Shutdown(); }
+void DiscordPresence::Shutdown() {
+  if (!initialized_) {
+    return;
+  }
+  Discord_Shutdown();
+  initialized_ = false;
+}
 
 }  // namespace discord
 }  // namespace xe

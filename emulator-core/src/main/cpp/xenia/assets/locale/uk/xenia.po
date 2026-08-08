@@ -115,10 +115,6 @@ msgstr "&Вигляд"
 msgid "&Volume"
 msgstr "&Гучність"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(установлено) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(невідома гра)"
@@ -965,6 +961,14 @@ msgstr "Профілі не знайдено"
 msgid "No file path is set for this title."
 msgstr "Для цієї гри не задано шлях до файлу."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "Ігор не знайдено."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "Нових ігор не знайдено."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1318,10 +1322,6 @@ msgstr "Стан"
 msgid "Status: %s"
 msgstr "Стан: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "Стан: установлено"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "Зупинити гру й повернутися до списку"
@@ -1584,3 +1584,4 @@ msgstr "Шар налагодження Direct3D 12 встановлено, ал
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll не знайдено, потрібен для графічного бекенда Vulkan. Завантажити зараз (~20 MB)?"
+

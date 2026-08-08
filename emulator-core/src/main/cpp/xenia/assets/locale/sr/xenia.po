@@ -115,10 +115,6 @@ msgstr "&Приказ"
 msgid "&Volume"
 msgstr "&Јачина звука"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
-msgid "(Installed) "
-msgstr "(инсталирано) "
-
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:62
 msgid "(unknown title)"
 msgstr "(непозната игра)"
@@ -965,6 +961,14 @@ msgstr "Профили нису пронађени"
 msgid "No file path is set for this title."
 msgstr "За ову игру није постављена путања датотеке."
 
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No games found."
+msgstr "Ниједна игра није пронађена."
+
+#: src/xenia/ui/game_scan_progress_dialog_wx.cc:376
+msgid "No new games found."
+msgstr "Нема нових пронађених игара."
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:178
 #: src/xenia/ui/profile_editor_dialog_wx.cc:184
 #: src/xenia/ui/quick_settings_dialog_wx.cc:279
@@ -1316,10 +1320,6 @@ msgstr "Статус"
 msgid "Status: %s"
 msgstr "Статус: %s"
 
-#: src/xenia/ui/game_scan_progress_dialog_wx.cc:239
-msgid "Status: Installed"
-msgstr "Статус: инсталирано"
-
 #: src/xenia/app/emulator_window.cc:1713
 msgid "Stop the running title and return to the list"
 msgstr "Заустави текућу игру и врати се на листу"
@@ -1582,3 +1582,4 @@ msgstr "Direct3D 12 слој за отклањање грешака инстал
 #: src/xenia/ui/redist_installer_wx.cc:746
 msgid "vulkan-1.dll not found, required for the Vulkan graphics backend. Download now (~20 MB)?"
 msgstr "vulkan-1.dll није пронађен, потребан за Vulkan графички бекенд. Преузети сада (~20 MB)?"
+

@@ -132,6 +132,9 @@ class StackLayout {
   // was GUEST_CTX_HOME, can't remove because that'd throw stack alignment off.
   // instead, can be used as a temporary in sequences
   static constexpr size_t GUEST_SCRATCH = 0;
+  // Three qwords above the argument home area, so unlike GUEST_SCRATCH they
+  // survive a call. Used where rsp must stay put for the unwind info.
+  static constexpr size_t GUEST_PREEMPT_SAVE = 32;
 
   // when profiling is on, this stores the nanosecond time at the start of the
   // function

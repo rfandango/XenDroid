@@ -13,7 +13,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "xenia/base/threading.h"
 #include "xenia/kernel/kernel.h"
@@ -30,25 +33,45 @@ namespace kernel {
 constexpr fourcc_t kXObjSignature = make_fourcc('X', 'E', 'N', '\0');
 
 class KernelState;
+class XThread;
 
 template <typename T>
 class object_ref;
 
+// FIFO of cooperative fiber waiters, shared by the permit-gated types so a
+// parked waiter is not starved by a running acquirer that never parks.
+class CooperativeWaiterFifo {
+ public:
+  void Add(XThread* thread);
+  // Unregisters |thread|, returning true if a waiter remains to be woken.
+  bool Remove(XThread* thread);
+  // True when |thread| is first in line (or no one is queued).
+  bool MayAcquire(XThread* thread);
+  bool HasWaiters();
+  // First in line, or null with no waiters queued.
+  XThread* Front();
+
+ private:
+  std::mutex lock_;
+  std::deque<XThread*> waiters_;
+};
+
 enum X_DISPATCHER_FLAGS : uint8_t {
-  DISPATCHER_MANUAL_RESET_EVENT = 0,
-  DISPATCHER_AUTO_RESET_EVENT = 1,  // EventSynchronizationObject
-  DISPATCHER_MUTANT = 2,
+  DISPATCHER_MANUAL_RESET_EVENT = 0,  // EventNotificationObject
+  DISPATCHER_AUTO_RESET_EVENT = 1,    // EventSynchronizationObject
+  DISPATCHER_MUTANT = 2,              // MutantObject
   DISPATCHER_QUEUE = 4,
   DISPATCHER_SEMAPHORE = 5,  // SemaphoreObject
   DISPATCHER_THREAD = 6,
   DISPATCHER_MANUAL_RESET_TIMER = 8,
   DISPATCHER_AUTO_RESET_TIMER = 9,
+  DISPATCHER_UNDEFINED = 0xFF,
 };
 
 // https://www.nirsoft.net/kernel_struct/vista/DISPATCHER_HEADER.html
 typedef struct {
   struct {
-    uint8_t type;  // X_DISPATCHER_FLAGS
+    X_DISPATCHER_FLAGS type;
 
     union {
       uint8_t abandoned;
@@ -152,27 +175,30 @@ class XObject {
       default:
         return false;
     }
-    return false;
   }
 
-  static Type MapGuestTypeToHost(uint16_t type) {
-    // todo: this is not fully filled in
-    switch (type) {
-      case 0:
-      case 1:
+  static Type MapGuestTypeToHost(X_DISPATCHER_FLAGS flag) {
+    // TODO: This is not fully filled in.
+    switch (flag) {
+      case X_DISPATCHER_FLAGS::DISPATCHER_MANUAL_RESET_EVENT:
+      case X_DISPATCHER_FLAGS::DISPATCHER_AUTO_RESET_EVENT:
         return Type::Event;
-      case 2:
         return Type::Mutant;
-      case 5:
+      case X_DISPATCHER_FLAGS::DISPATCHER_MUTANT:
+        return Type::Mutant;
+      case X_DISPATCHER_FLAGS::DISPATCHER_SEMAPHORE:
         return Type::Semaphore;
-      case 6:
+      case X_DISPATCHER_FLAGS::DISPATCHER_THREAD:
         return Type::Thread;
-      case 8:
-      case 9:
+      case X_DISPATCHER_FLAGS::DISPATCHER_MANUAL_RESET_TIMER:
+      case X_DISPATCHER_FLAGS::DISPATCHER_AUTO_RESET_TIMER:
         return Type::Timer;
+      default:
+        return Type::Undefined;
+        // assert_always();
     }
-    return Type::Undefined;
   }
+
   XObject(Type type);
   XObject(KernelState* kernel_state, Type type, bool host_object = false);
   virtual ~XObject();
@@ -231,14 +257,15 @@ class XObject {
                                uint32_t processor_mode, uint32_t alertable,
                                uint64_t* opt_timeout);
 
-  static object_ref<XObject> GetNativeObject(KernelState* kernel_state,
-                                             void* native_ptr,
-                                             int32_t as_type = -1,
-                                             bool already_locked = false);
+  static object_ref<XObject> GetNativeObject(
+      KernelState* kernel_state, void* native_ptr,
+      X_DISPATCHER_FLAGS as_type = DISPATCHER_UNDEFINED,
+      bool already_locked = false);
   template <typename T>
-  static object_ref<T> GetNativeObject(KernelState* kernel_state,
-                                       void* native_ptr, int32_t as_type = -1,
-                                       bool already_locked = false);
+  static object_ref<T> GetNativeObject(
+      KernelState* kernel_state, void* native_ptr,
+      X_DISPATCHER_FLAGS as_type = DISPATCHER_UNDEFINED,
+      bool already_locked = false);
 
   // Priority increment stored by the most recent signal operation
   // (KeSetEvent, KeReleaseSemaphore, etc.).  Read by the waiter on wake
@@ -253,6 +280,67 @@ class XObject {
   // Called on successful wait.
   virtual void WaitCallback() {}
   virtual xe::threading::WaitHandle* GetWaitHandle() { return nullptr; }
+  // True when the calling guest thread already satisfies this object without
+  // consuming it, meaning a mutant it already owns.
+  virtual bool IsReenteredByCurrentThread() { return false; }
+  // Status for a successful acquire, letting a mutant report abandonment.
+  virtual X_STATUS AcquireStatus() { return X_STATUS_SUCCESS; }
+
+  // Fair FIFO wakeup for cooperative fiber waiters on fungible-permit objects.
+  // Begin/End register the waiter and MayAcquire gates the poll to the queue
+  // front. Call the Enter/Leave wrappers below rather than these directly.
+  virtual void CooperativeWaitBegin(XThread* thread) {}
+  virtual void CooperativeWaitEnd(XThread* thread) {}
+  // Permit-gated types return their FIFO front - the only waiter that can act
+  // on a signal - so the scheduler wakes just that thread's CPU. Null means
+  // any watcher may proceed (events) and every watcher's CPU is woken.
+  virtual XThread* CooperativeWakeTarget() { return nullptr; }
+  virtual bool CooperativeMayAcquire(XThread* thread) { return true; }
+
+ public:
+  // Bumped by every state change that could satisfy a cooperative waiter, so
+  // the scheduler can skip re-polling a parked waiter until it moves.
+  uint32_t cooperative_signal_epoch() const {
+    return cooperative_signal_epoch_.load();
+  }
+  // Bumped by a release-everyone-then-reset transition (a manual-reset pulse),
+  // which is gone from the host primitive before any parked fiber re-polls it.
+  virtual uint32_t cooperative_pulse_epoch() const { return 0; }
+  // Bumps the epoch, then wakes the dispatch threads. Call after the host
+  // primitive is signaled, never before.
+  void WakeCooperativeWaiters();
+
+  // Ring of the most recent cooperative wakes, dumped by the scheduler's
+  // no-progress report. A wedge is diagnosed by pairing what the parked fibers
+  // wait on against what was last signalled, and the old boot-window trace ran
+  // out of budget long before any steady-state freeze.
+  struct SignalRecord {
+    uint64_t seq;
+    uint32_t handle;
+    uint32_t signaler_thread;
+    uint32_t signaler_lr;
+    uint32_t uptime_ms;
+    uint8_t type;
+  };
+  static void RecordCooperativeSignal(XObject* object);
+  // Oldest-first, at most |max| entries.
+  static std::vector<SignalRecord> RecentCooperativeSignals(size_t max);
+
+  // Registers |thread| as a cooperative waiter on this object and records the
+  // registration on the thread, so a terminate that never unwinds the parked
+  // stack can still release it.
+  void EnterCooperativeWait(XThread* thread);
+  void LeaveCooperativeWait(XThread* thread);
+  // Releases whatever registration |thread| still holds, if any. Called when a
+  // thread is torn down without returning through its wait.
+  static void AbandonCooperativeWait(XThread* thread);
+
+ protected:
+  // Handle to wait on for this object on behalf of the calling guest thread.
+  // An already-owned mutant resolves to an always-signaled stand-in, so a
+  // recursive acquire succeeds without consuming the primitive. |slot| is the
+  // index in the caller's wait array, which cannot name one handle twice.
+  xe::threading::WaitHandle* GetWaitHandleForCurrentThread(size_t slot);
 
   // Creates the kernel object for guest code to use. Typically not needed.
   uint8_t* CreateNative(uint32_t size);
@@ -274,6 +362,8 @@ class XObject {
   KernelState* kernel_state_;
 
   uint32_t priority_increment_ = 0;
+
+  std::atomic<uint32_t> cooperative_signal_epoch_{0};
 
   // Host objects are persisted through resets/etc.
   bool host_object_ = false;
@@ -421,7 +511,8 @@ object_ref<T> retain_object(T* ptr) {
 
 template <typename T>
 object_ref<T> XObject::GetNativeObject(KernelState* kernel_state,
-                                       void* native_ptr, int32_t as_type,
+                                       void* native_ptr,
+                                       X_DISPATCHER_FLAGS as_type,
                                        bool already_locked) {
   return object_ref<T>(reinterpret_cast<T*>(
       GetNativeObject(kernel_state, native_ptr, as_type, already_locked)

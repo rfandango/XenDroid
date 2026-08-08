@@ -75,6 +75,7 @@ bool D3D12ZPDQueryPool::EnsureInitialized(
       Shutdown();
       return false;
     }
+    readback_buffer_->SetName(L"ZPD Occlusion Readback Buffer");
 
     D3D12_RANGE read_range = {};
     read_range.Begin = 0;
@@ -127,11 +128,14 @@ bool D3D12ZPDQueryPool::EnsureInitialized(
   if (FAILED(device->CreateCommittedResource(
           &ui::d3d12::util::kHeapPropertiesDefault,
           provider.GetHeapFlagCreateNotZeroed(), &counter_buffer_desc,
-          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+          D3D12_RESOURCE_STATE_COMMON, nullptr,
           IID_PPV_ARGS(&rov_counter_buffer_)))) {
     XELOGW("D3D12ZPDQueryPool: Failed to allocate the ZPD ROV counter buffer.");
     return false;
   }
+  rov_counter_buffer_->SetName(L"ZPD ROV Counter Buffer");
+  rov_counter_buffer_state_ = D3D12_RESOURCE_STATE_COMMON;
+  rov_counter_buffer_state_submission_ = UINT64_MAX;
 
   D3D12_RESOURCE_DESC readback_buffer_desc;
   ui::d3d12::util::FillBufferResourceDesc(readback_buffer_desc,
@@ -148,6 +152,7 @@ bool D3D12ZPDQueryPool::EnsureInitialized(
     rov_counter_buffer_.Reset();
     return false;
   }
+  rov_counter_readback_buffer_->SetName(L"ZPD ROV Counter Readback Buffer");
 
   D3D12_RANGE read_range = {};
   read_range.Begin = 0;
@@ -279,35 +284,56 @@ void D3D12ZPDQueryPool::QueueQueryResolve(uint32_t query_index,
   }
 }
 
+void D3D12ZPDQueryPool::TransitionROVCounterBuffer(
+    DeferredCommandList& deferred_command_list, uint64_t submission,
+    D3D12_RESOURCE_STATES new_state) {
+  // The buffer decayed to COMMON when the previous submission finished, so
+  // start each submission from COMMON regardless of the last tracked state.
+  if (submission != rov_counter_buffer_state_submission_) {
+    rov_counter_buffer_state_ = D3D12_RESOURCE_STATE_COMMON;
+    rov_counter_buffer_state_submission_ = submission;
+  }
+  if (rov_counter_buffer_state_ == new_state) {
+    return;
+  }
+  D3D12_RESOURCE_BARRIER barrier = {};
+  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  barrier.Transition.pResource = rov_counter_buffer_.Get();
+  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+  barrier.Transition.StateBefore = rov_counter_buffer_state_;
+  barrier.Transition.StateAfter = new_state;
+  deferred_command_list.D3DResourceBarrier(1, &barrier);
+  rov_counter_buffer_state_ = new_state;
+}
+
 void D3D12ZPDQueryPool::ClearROVCounter(
-    DeferredCommandList& deferred_command_list, uint32_t query_index) const {
+    DeferredCommandList& deferred_command_list, uint64_t submission,
+    uint32_t query_index) {
   if (!rov_counter_initialized() || query_index >= capacity_) {
     return;
   }
 
-  // This buffer stays in UNORDERED_ACCESS for the duration of its use. Before
-  // reusing a slot, order this write after any atomic adds issued by the
-  // previous query that owned the same index.
-  D3D12_RESOURCE_BARRIER uav_barrier = {};
-  uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-  uav_barrier.UAV.pResource = rov_counter_buffer_.Get();
-  deferred_command_list.D3DResourceBarrier(1, &uav_barrier);
+  // WriteBufferImmediate writes as a copy, so the buffer must be in COPY_DEST.
+  // The transition also orders this reset after any atomic adds from the
+  // previous query that owned the same slot.
+  TransitionROVCounterBuffer(deferred_command_list, submission,
+                             D3D12_RESOURCE_STATE_COPY_DEST);
 
-  // Only the selected 32 bit slot needs to be reset, so use
-  // WriteBufferImmediate instead of transitioning the whole buffer through a
-  // copy path.
+  // Only the selected 32 bit slot needs to be reset.
   deferred_command_list.D3DWriteBufferImmediate(
       rov_counter_buffer_->GetGPUVirtualAddress() +
           static_cast<uint64_t>(query_index) * sizeof(uint32_t),
       0u);
 
-  // Order the zero write before any upcoming PS atomic adds so the next query
-  // using this slot sees the cleared counter value.
-  deferred_command_list.D3DResourceBarrier(1, &uav_barrier);
+  // Return to UNORDERED_ACCESS for the pixel shader atomic adds. This also
+  // orders the reset before them so the next query sees the cleared value.
+  TransitionROVCounterBuffer(deferred_command_list, submission,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
 
 void D3D12ZPDQueryPool::FlushResolveBatch(
-    DeferredCommandList& deferred_command_list, bool submission_open) {
+    DeferredCommandList& deferred_command_list, uint64_t submission,
+    bool submission_open) {
   if (!submission_open || (resolve_batch_indices_.empty() &&
                            rov_counter_resolve_batch_indices_.empty())) {
     return;
@@ -377,13 +403,8 @@ void D3D12ZPDQueryPool::FlushResolveBatch(
   // this path means copying the finished 32 bit slots out of the UAV buffer.
   // The whole buffer is transitioned for the copy and then returned to
   // UNORDERED_ACCESS since D3D12 state is tracked per resource, not per range.
-  D3D12_RESOURCE_BARRIER barrier = {};
-  barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-  barrier.Transition.pResource = rov_counter_buffer_.Get();
-  barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
-  deferred_command_list.D3DResourceBarrier(1, &barrier);
+  TransitionROVCounterBuffer(deferred_command_list, submission,
+                             D3D12_RESOURCE_STATE_COPY_SOURCE);
 
   build_ranges(rov_counter_resolve_batch_indices_,
                rov_counter_resolve_batch_pending_);
@@ -395,9 +416,8 @@ void D3D12ZPDQueryPool::FlushResolveBatch(
         offset, size);
   }
 
-  barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-  barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  deferred_command_list.D3DResourceBarrier(1, &barrier);
+  TransitionROVCounterBuffer(deferred_command_list, submission,
+                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
 
 uint64_t D3D12ZPDQueryPool::GetQueryReadbackValue(uint32_t query_index,

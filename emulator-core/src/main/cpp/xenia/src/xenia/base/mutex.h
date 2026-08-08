@@ -37,6 +37,7 @@ class alignas(4096) xe_global_mutex {
   void lock();
   void unlock();
   bool try_lock();
+  bool is_held_by_current_thread() const;
 };
 using global_mutex_type = xe_global_mutex;
 
@@ -103,6 +104,7 @@ class alignas(4096) xe_global_mutex {
   void lock();
   void unlock();
   bool try_lock();
+  bool is_held_by_current_thread() const;
 };
 using global_mutex_type = xe_global_mutex;
 
@@ -158,7 +160,53 @@ class xe_unlikely_mutex {
 
 using xe_mutex = xe_fast_mutex;
 #else
-using global_mutex_type = std::recursive_mutex;
+// Generic owner-tracking recursive mutex for platforms without a fast-path
+// implementation. The guest scheduler's preempt deferral and I/O-offload
+// guard need is_held_by_current_thread, which std::recursive_mutex cannot
+// answer.
+class xe_global_mutex {
+  std::mutex inner_;
+  std::atomic<std::thread::id> owner_{};
+  uint32_t recursion_count_ = 0;
+
+ public:
+  xe_global_mutex() = default;
+  ~xe_global_mutex() = default;
+
+  void lock() {
+    auto self = std::this_thread::get_id();
+    if (owner_.load(std::memory_order_relaxed) == self) {
+      ++recursion_count_;
+      return;
+    }
+    inner_.lock();
+    owner_.store(self, std::memory_order_relaxed);
+    recursion_count_ = 1;
+  }
+  void unlock() {
+    if (--recursion_count_ == 0) {
+      owner_.store(std::thread::id(), std::memory_order_relaxed);
+      inner_.unlock();
+    }
+  }
+  bool try_lock() {
+    auto self = std::this_thread::get_id();
+    if (owner_.load(std::memory_order_relaxed) == self) {
+      ++recursion_count_;
+      return true;
+    }
+    if (!inner_.try_lock()) {
+      return false;
+    }
+    owner_.store(self, std::memory_order_relaxed);
+    recursion_count_ = 1;
+    return true;
+  }
+  bool is_held_by_current_thread() const {
+    return owner_.load(std::memory_order_relaxed) == std::this_thread::get_id();
+  }
+};
+using global_mutex_type = xe_global_mutex;
 using xe_mutex = std::mutex;
 using xe_unlikely_mutex = std::mutex;
 #endif
@@ -212,6 +260,10 @@ class global_critical_region {
  public:
   constexpr global_critical_region() {}
   static global_mutex_type& mutex();
+
+  // True if the calling host thread currently holds the region. Always false on
+  // the std::recursive_mutex fallback, which has no owner query.
+  static bool is_held_by_current_thread();
 
   // Acquires a lock on the global critical section.
   // Use this when keeping an instance is not possible. Otherwise, prefer
